@@ -1,0 +1,13 @@
+.{
+    .name = .zuil,
+    .version = "0.0.0",
+    .fingerprint = 0x87c7c8c24f9705c0,
+    .minimum_zig_version = "0.17.0-dev.389+f5a1968f6",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "examples",
+    },
+}
