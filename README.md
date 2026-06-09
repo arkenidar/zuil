@@ -45,6 +45,8 @@ build.zig, build.zig.zon   Zig 0.17-dev build; emits libzuil.so
 src/cdefs.h                SDL3 header for the translate-c step
 src/zuil.zig               the exported C ABI  (Step 0: zuil_sdl_version)
 examples/smoke.lua         LuaJIT FFI smoke test
+examples/smoke.py          Python/ctypes smoke test (same output)
+docs/architecture.md       design decisions & widget model (read this)
 ```
 
 ## Roadmap (sketch)
@@ -53,6 +55,12 @@ examples/smoke.lua         LuaJIT FFI smoke test
   (`on_paint` / `on_key` / `on_mouse`) with `zuil.run()` owning the loop.
 - **M2** — text (SDL3_ttf) and a software-framebuffer blit (pixel / raster use).
 - **M3** — an optional widget set.
+
+## Design
+
+The widget model, the *mechanism-vs-policy* split, and why ZUIL is **immediate-mode by default**
+(with retained also supported) are written up in
+**[docs/architecture.md](docs/architecture.md)** — read that before building on the API.
 
 ## License
 
