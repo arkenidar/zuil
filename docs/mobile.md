@@ -39,20 +39,54 @@ Android, and no iOS no-JIT penalty (Zig is AOT).
 - **Recordable-draw choke-point + serializable input** → enables the **"umbilical"**: run the
   script on desktop, stream to a thin client on the phone.
 
-## The honest part: Zig + NDK (untested)
+## Zig + NDK — spikes A & B **verified** (2026-06-09)
 
-Zig is a strong cross-compiler — `zig build -Dtarget=aarch64-linux-android` is the target. The
-rough edges are the **Android plumbing**, not Zig-the-language:
+The native toolchain path is proven on this machine. Present: Android **NDK r30-beta1**
+(`~/apps/android-sdk/ndk/30.0.14904198` — arm64 sysroot, API 21–36), SDK tools (`adb`,
+`sdkmanager`, **emulator**, `cmake 4.1.2`), **JDK 21**, and the **SDL3 3.4.10 AAR**
+(`~/apps/SDL3-devel-3.4.10-android/SDL3-3.4.10.aar`: prebuilt `libSDL3.so` for all four ABIs +
+`SDL3-Headers` + Java `SDLActivity`, via prefab).
 
-- wiring **bionic libc / the NDK sysroot**, linking NDK libs (`liblog`, `libandroid`);
-- building **SDL3 for Android** and the **Java `SDLActivity` glue**;
-- the Gradle / APK packaging.
+- **Spike A ✅** — `zig build-lib … -target aarch64-linux-android --libc <file> -lc` produced an
+  ELF *"for Android 34, built by NDK r30"* (NEEDED `libc.so`, `libdl.so`). **Zig does not bundle
+  bionic**, so a Zig `--libc` paths file is *required*:
 
-**De-risk with cheap, device-free, link-only spikes (fail fast):**
+  ```
+  include_dir     = <NDK>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+  sys_include_dir = <NDK>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+  crt_dir         = <NDK>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/34
+  ```
+  (`--sysroot` double-prefixes absolute `-L` paths; use the `--libc` file instead.)
 
-1. cross-compile a *trivial, no-SDL* Zig lib to `aarch64-linux-android` → proves the NDK/bionic
-   wiring;
-2. then cross-compile the Step-0 `libzuil` (needs SDL3-for-Android present) → proves the SDL link.
+- **Spike B ✅** — extracted the AAR's arm64 `libSDL3.so` + `SDL3-Headers`, then cross-built the
+  Step-0 call (`SDL_GetVersion`) for `aarch64-linux-android` linking `-lSDL3`. Result: arm64 `.so`,
+  **NEEDED `libSDL3.so`**, exporting `zuil_sdl_version`. The native build + SDL link works with
+  **no SDL source build** — just the AAR.
 
-If the Android NDK / an Android SDL3 build aren't installed, the spike stops early — and *that*
-tells us what to install first.
+**`build.zig` wiring (later):** add an Android target option that sets the module's libc file
+(the `.txt` above), points `translate-c`/link at the AAR's extracted `SDL3-Headers/include` +
+`android.arm64-v8a/libSDL3.so`, and emits the app `.so` into `app/src/main/jniLibs/arm64-v8a/`.
+
+## Spike C — **PASSED** (2026-06-09): a Zig+SDL3 app ran on the emulator
+
+End-to-end verified — built, packaged, installed, launched, and rendered on Android.
+
+- **App:** a minimal Zig `libmain.so` (x86_64) exporting `SDL_main`, which inits SDL video,
+  creates a window + renderer, and renders a solid blue (`#2080ff`) frame for 600 frames.
+- **Packaging — no Gradle needed.** Built with the SDK **build-tools only**: app manifest (using
+  framework theme `@android:style/Theme.NoTitleBar.Fullscreen`, activity `org.libsdl.app.SDLActivity`)
+  → `aapt2 link` (no resources — SDLActivity is code-only) + `classes.dex` (`d8` of the AAR's
+  `classes.jar`) + `lib/x86_64/{libSDL3.so, libmain.so}` → `zipalign` → `apksigner`. Simpler than
+  the AAR's documented Gradle/prefab route, and it works.
+- **Run:** emulator `system-images;android-35;google_apis;x86_64` (KVM-accelerated, headless
+  `-gpu swiftshader_indirect`); boot ~28 s; `adb install` → `am start`. logcat showed:
+  `Load …/libSDL3.so … ok` → `…/libmain.so … ok` → `SDL: Running main function SDL_main …` →
+  `SDL/APP : ZUIL: hello from Zig on Android (SDL 3004010)` → `… window + renderer up; rendering`.
+  No crashes; `screencap` captured the blue frame.
+
+  ![ZUIL on the Android emulator — the Zig + SDL3 app (libmain.so → SDL_main) rendering its blue frame on android-35 x86_64](android-spike.png)
+
+**Conclusion:** the Zig-app + ZUIL-layer mobile path is *fully proven* — Zig builds & links a real
+Android SDL3 app (spikes A/B), it packages into a signed installable APK, and it runs on Android
+(spike C). The remaining work for a real ZUIL mobile app is normal product work (a Gradle project
+for distribution, arm64 ABI for devices, real UI), not a feasibility question.
