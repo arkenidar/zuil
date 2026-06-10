@@ -43,7 +43,7 @@ write UI against once.
 | ZUIL's own scope | **Mechanism, not policy** | A small primitive layer that makes *both* widget disciplines cheap |
 | Default widget discipline | **Immediate mode** (Dear-ImGui-style, **not** functional-pure) | Tiny API, no FFI callbacks, return-value interactions; mainstream and proven |
 | Retained mode | **Also supported** over the same mechanism | Forms / editable text / focus are more natural retained |
-| Remote-UI ("umbilical") | **Kept reachable**, not required | Via a recordable draw choke-point + serializable input (§7); also a dev strategy for un-owned/iOS devices — [scripting.md](scripting.md) |
+| Remote-UI ("umbilical") | **Kept reachable**, not required | Via a recordable draw choke-point + serializable input (§7); also a dev strategy for un-owned/iOS devices — [umbilical.md](umbilical.md), [scripting.md](scripting.md) |
 | Mobile linkage | **Both, selectable** — dynamic `.so` (FFI) + static `.a` (C++/iOS) | Loading model picks it: `ffi.load` needs `.so`; iOS/C++ want static |
 | On-device scripting | **Validated path**, parallel to the Zig app | LuaJIT-on-Android proven; PUC-Lua for iOS — [scripting.md](scripting.md) |
 | Networked events | **Same pump as input** — injection primitive + opt-in transport | one scheduling point; umbilical/REPL/messages/timers unified — [events.md](events.md) |
@@ -160,7 +160,9 @@ recordable choke-point** and (b) **input being a serializable snapshot**. ZUIL k
 *mechanism* (every draw goes through the vocabulary, which can be recorded; input is a plain
 struct). So you may write fully imperative user code **and** keep remote-UI / Android / hot-reload
 reachable later. Functional purity is therefore an *optional user-space style*, not a
-ZUIL-level requirement.
+ZUIL-level requirement. The umbilical itself — script-push, channels, transport, the remote
+debugging procedures — is specified in [umbilical.md](umbilical.md), over the event mechanics
+of [events.md](events.md).
 
 ---
 
@@ -240,6 +242,8 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   the VS Code dev loop and the REPL-channel design.
 - **[Events](events.md)** — input, network, timers on one pump: the injection primitive, the
   opt-in transport module, and the async/await position (the pump as reactor).
+- **[Umbilical](umbilical.md)** — script deployment & remote dev cycling: the channel catalogue,
+  topologies, framed-TCP-push protocol, and debugging as procedures.
 
 ---
 
@@ -298,3 +302,19 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   wakeups + timers; **correlation ids are payload-level policy**. Injection transports stay
   **dev-only, localhost, opt-in**; security mechanics recorded as open issues. The ledger gains
   **firmness grades** (1 = hard … 10 = soft), extending analysis.md's firm-vs-semi-fluid framing.
+- **2026-06-10** — Umbilical enhanced ([umbilical.md](umbilical.md)), reconciled against
+  events.md. Decided: **logic-push first** — script deployment is the umbilical's high-value
+  channel (*hot-reload where the file arrives over a socket*), remote-render designed-in but
+  deferred to post-M1; **four v1 channels** (`script_push`, `log`/`error`, `eval`, `asset_push`)
+  as **channel ids on `message` events** over events.md's core framing + injection primitive —
+  the predecessor's codec/`Transport{Local,Tcp}` ideas are *subsumed* there, one layer lower;
+  **framed TCP push primary** (magic + version byte + channel id + length; version mismatch
+  refuses loudly; host keeps last-good script, idempotent re-push), **HTTP-pull as the specified
+  degraded fallback** (poll + ETag, push-only); the **host connects out** (`adb reverse` / SSH
+  `-R` — no listening port on devices); umbilical *policy* (reload, eval dispatch, log
+  mirroring) stays **consumer-side** per the moves-frames-never-interprets fence; remote
+  security = **SSH tunnels + hello token**, not TLS-in-protocol; **debugging recorded as
+  procedures** (Lua/native/dual × local/Android/VPS matrix; LuaPanda + gdb recipes carried from
+  the predecessor, which proved them locally); zig-sdl-gui ingredients given explicit
+  **adopt/adapt/reject** verdicts (purity-as-requirement stays rejected). Sequencing recorded
+  U0–U4 (doc → desktop spike → `adb reverse` host → eval/log → thin client).

@@ -140,6 +140,10 @@ wasm, replaying draws into ZUIL/SDL3-in-the-browser and shipping input back — 
 install. Browsers cannot open raw TCP, so the protocol is **message-framed and
 transport-pluggable** (TCP natively, **WebSocket** in the browser — same frames); and the future
 **REPL channel** (web.md §7) is the umbilical's *logic-injection dual* over the same framing.
+The event-side mechanics — the injection primitive, the `message` event, the opt-in transport —
+are specified in [events.md](events.md); the umbilical's own protocol — channels (script-push,
+logs, eval, assets), topologies, transport choices, and the remote debugging procedures — in
+[umbilical.md](umbilical.md).
 
 ---
 
@@ -222,6 +226,10 @@ So: **Lua opens the way for ZUIL; ZUIL (proven via Lua) opens the way for C++.**
 - The **umbilical is binding-agnostic** — scripting is *optional*. The logic host may be
   C / C++ / Zig / Lua, and the **device thin client is pure native** (no scripting, JIT, or
   `dlopen` on device). This makes UD the cleanest iOS path.
+- The **umbilical's protocol is designed** ([umbilical.md](umbilical.md)): logic-push first,
+  framed TCP push primary with HTTP-pull fallback, four v1 channels as channel ids on `message`
+  events ([events.md](events.md)), host-connects-out (`adb reverse` / SSH), debugging recorded
+  as procedures.
 - **Swift** consumes the C ABI natively (static `.a`, module map / bridging header) as the iOS
   host language; detailed iOS/Swift work is *postponed but recorded*.
 - **The web is the second "hard case"** ([web.md](web.md), proven 2026-06-10): no JIT, no
@@ -241,3 +249,5 @@ So: **Lua opens the way for ZUIL; ZUIL (proven via Lua) opens the way for C++.**
   channel.
 - [Events](events.md) — input, network, timers on one pump: the injection primitive, the
   opt-in transport, the async/await position.
+- [Umbilical](umbilical.md) — script deployment & remote dev cycling: channels, topologies,
+  protocol, debugging procedures.

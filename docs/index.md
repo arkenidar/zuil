@@ -27,6 +27,9 @@ Source & build instructions: <https://github.com/arkenidar/zuil>
 - [Events](events.md) — input, network, timers on **one pump**: the event-injection primitive,
   the opt-in transport module, umbilical/REPL/messages/timers, and the **async/await** position
   (the pump as reactor).
+- [Umbilical](umbilical.md) — **script deployment & remote dev cycling**: logic-push first, the
+  channel catalogue (script/logs/eval/assets), topologies incl. `adb reverse` and VPS, the
+  framed-TCP-push protocol with HTTP-pull fallback, and **debugging as procedures**.
 - [Analysis](analysis.md) — a curated descriptive analysis of the whole project: code-vs-design
   status, the firm vs semi-fluid decision layers, possibilities, and risks (snapshot 2026-06-10).
 
