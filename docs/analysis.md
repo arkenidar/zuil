@@ -173,8 +173,9 @@ decisions make reachable at low marginal cost:
 - **Games-adjacent uses**: the consumption model is explicitly "gaming-like" (frame loop, pulled
   input, immediate draw), so tool UIs, debug overlays, game viewports via canvas, and
   pixel-buffer work (`blit_rgba` for a raytracer) are first-class rather than awkward.
-- **Web** is name-checked (SDL3/WASM exists) but is the least-developed direction in the docs —
-  a real possibility, currently zero design investment.
+- **Web** graduated from name-check to **wired target** on 2026-06-10 ([web.md](web.md)): the
+  Step-0 wasm smoke is proven (node + browser via `zig build -Dwasm`), and the design record
+  covers user-target integration, the dev loop, and the REPL channel.
 
 ## 7. Honest risk assessment
 

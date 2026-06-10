@@ -20,6 +20,15 @@ Android, and no iOS no-JIT penalty (Zig is AOT).
 - **iOS:** analogous, and AOT — the LuaJIT no-JIT limit never applies.
 - **Desktop scripting (LuaJIT/Python)** stays a convenience; **Zig is the mobile/production path.**
 
+> **Update (2026-06-10): on-device scripting is now a *validated parallel*, not avoided.** LuaJIT
+> cross-builds for android-arm64 (NDK r30, FFI included — see below), so a scripted consumer (a
+> thin `SDL_main` app embedding a Lua VM that `ffi.load`s `libzuil.so`) is a real option *alongside*
+> the Zig-app path. On iOS, where there is no JIT and `dlopen` is restricted, the equivalent is
+> **PUC-Rio Lua statically linked via a C-API module** (no `dlopen`, callbacks trampoline-free).
+> The Zig-app AOT path remains the production default; the full strategy — linkage split, the two
+> Lua shims, the poll-style ABI, and the umbilical as a dev strategy for un-owned/iOS devices — is
+> in [scripting.md](scripting.md).
+
 ## What mobile adds (vs desktop)
 
 | Area | Desktop | Mobile delta |

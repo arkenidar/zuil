@@ -15,16 +15,21 @@ language is a thin shim, never a core change.
 
 ## Consumer matrix
 
-| Consumer | Reaches ZUIL via | Typical style |
-|---|---|---|
-| **Zig** | the core module (`@import("zuil")`), static link | idiomatic Zig; the mobile / production path |
-| **C** | the C ABI directly (`zuil.h`) | plain functions + opaque handles |
-| **C++** | the C ABI via `extern "C"` + an optional thin **RAII** header | wx-like classes wrapping handles |
-| **Lua** | LuaJIT FFI (`ffi.load`) | immediate-mode functions (`if ui.button() then …`) |
-| **Python** | `ctypes` / `cffi` | immediate-mode functions (desktop) |
+| Consumer | Reaches ZUIL via | Linkage | Typical style |
+|---|---|---|---|
+| **Zig** | the core module (`@import("zuil")`) | static | idiomatic Zig; the mobile / production path |
+| **C** | the C ABI directly (`zuil.h`) | static `.a` or dynamic `.so` | plain functions + opaque handles |
+| **C++** | the C ABI via `extern "C"` + an optional thin **RAII** header | static `.a` (self-contained) or dynamic `.so` | wx-like classes wrapping handles |
+| **Lua (LuaJIT)** | **FFI** (`ffi.load`) | **dynamic `.so`** (required) | immediate-mode functions (`if ui.button() then …`); desktop + Android — **no web** (no LuaJIT wasm port) |
+| **Lua (PUC-Rio)** | a **C-API module** (`luaopen_zuil`, `require`) | **static `.a`** | same API; the **iOS-blessed** path — and the **web** path ([web.md](web.md)), callbacks trampoline-free |
+| **Python** | `ctypes` / `cffi` | dynamic `.so` | immediate-mode functions (desktop) |
+| **JS (browser)** | Emscripten **`cwrap` / `ccall`** over the wasm exports | static `.a` (in the emcc-linked module) | logic host or page-embedder for the web face ([web.md](web.md)) |
+| **Swift** | the C ABI via a module map / bridging header | static `.a` | natural **iOS host / thin-client** language (treatment postponed — [scripting.md](scripting.md)) |
 
-`examples/smoke.lua` and `examples/smoke.py` already exercise the Lua and Python faces against the
-same `libzuil.so`.
+`examples/smoke.lua` and `examples/smoke.py` already exercise the Lua (LuaJIT) and Python faces
+against the same `libzuil.so`. The **two Lua faces** — LuaJIT-FFI (dynamic) vs PUC-Rio C-API
+(static) — and *why the split is decisive on mobile* (no-JIT / no-W^X) are covered in
+[scripting.md](scripting.md).
 
 ## C++: the wx-like face
 

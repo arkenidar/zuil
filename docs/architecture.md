@@ -43,7 +43,9 @@ write UI against once.
 | ZUIL's own scope | **Mechanism, not policy** | A small primitive layer that makes *both* widget disciplines cheap |
 | Default widget discipline | **Immediate mode** (Dear-ImGui-style, **not** functional-pure) | Tiny API, no FFI callbacks, return-value interactions; mainstream and proven |
 | Retained mode | **Also supported** over the same mechanism | Forms / editable text / focus are more natural retained |
-| Remote-UI ("umbilical") | **Kept reachable**, not required | Via a recordable draw choke-point + serializable input (§7) |
+| Remote-UI ("umbilical") | **Kept reachable**, not required | Via a recordable draw choke-point + serializable input (§7); also a dev strategy for un-owned/iOS devices — [scripting.md](scripting.md) |
+| Mobile linkage | **Both, selectable** — dynamic `.so` (FFI) + static `.a` (C++/iOS) | Loading model picks it: `ffi.load` needs `.so`; iOS/C++ want static |
+| On-device scripting | **Validated path**, parallel to the Zig app | LuaJIT-on-Android proven; PUC-Lua for iOS — [scripting.md](scripting.md) |
 
 ---
 
@@ -181,14 +183,21 @@ ZUIL is **one Zig core with two front doors**:
   every non-Zig binding: **C**, **C++** (`extern "C"` + an optional RAII header), **Lua** (LuaJIT
   FFI), **Python** (ctypes/cffi). See [bindings.md](bindings.md).
 
-`build.zig` emits both artifacts:
+`build.zig` emits the core in **three linkages** (selectable, one per app):
 
-- `b.addLibrary(.{ .linkage = .dynamic })` → **`libzuil.so`** (the FFI surface), and
+- `b.addLibrary(.{ .linkage = .dynamic })` → **`libzuil.so`** — the FFI surface (LuaJIT `ffi.load`);
+- `b.addLibrary(.{ .linkage = .static })` → **`libzuil.a`** — a static C archive for **C++**, a
+  PUC-Lua C-API module, **iOS**, and the **web** (`-Dwasm`; no runtime loading in either —
+  see [web.md](web.md));
 - `b.addModule("zuil", …)` → a **Zig package** other `build.zig.zon` projects depend on and
   **statically link** (e.g. a mobile app — see [mobile.md](mobile.md)).
 
 So **desktop = scripting convenience** (LuaJIT/Python → C ABI); **mobile / production = a Zig app
 → the Zig API → ZUIL, statically linked**. The C ABI is a *veneer*, not the core.
+
+**On-device scripting is also a validated consumption mode** (not only desktop): LuaJIT
+cross-builds for Android arm64 (proven 2026-06-10) and PUC-Lua is the iOS-blessed shape. This is a
+*parallel* to the Zig-app path, not a replacement — see [scripting.md](scripting.md).
 
 **Bonus:** immediate-mode widgets are *functions, not objects* (`button(id, rect, label) -> bool`),
 so they are trivially C-ABI-able. The bundled immediate widget set can live **in the Zig core** —
@@ -221,6 +230,10 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   deployment.
 - **[Bindings](bindings.md)** — the wxWidgets-style multi-language story: one core, many faces
   over the C ABI (Zig / C / C++ / Lua / Python).
+- **[Scripting & clients](scripting.md)** — cross-platform consumption: Lua-first sequencing, the
+  static/dynamic linkage split, LuaJIT-FFI vs PUC-Lua C-API, the umbilical as a dev strategy, iOS.
+- **[Web / WASM](web.md)** — Emscripten as user-target and devel-target; the second "hard case";
+  the VS Code dev loop and the REPL-channel design.
 
 ---
 
@@ -240,3 +253,27 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   lifecycle/context-loss. Split the design into topic docs: canvas, layout, mobile, bindings —
   and framed the multi-language story as a **wxWidgets-style parallel** (one core; Zig / C / C++ /
   Lua / Python bindings over the C ABI).
+- **2026-06-10** — Cross-platform consumption strategy ([scripting.md](scripting.md)). Proved
+  **LuaJIT cross-builds for android-arm64** (NDK r30, FFI included) and wired a **`build.zig`
+  Android target** (dynamic `libzuil.so` linking the SDL3 AAR). Decided: emit **both** C-ABI
+  linkages (dynamic `.so` for FFI + static `.a` for C++/iOS), selectable one-per-app; **two
+  scripting shims over one ABI** — LuaJIT-FFI (desktop/Android) and **PUC-Rio Lua C-API** (iOS +
+  hardened Android, callbacks trampoline-free); the C ABI **centres a poll-style pump** because FFI
+  callbacks need W^X trampolines (forbidden on iOS, fragile on hardened Android); **on-device
+  scripting is embraced** as a parallel to the Zig-app path (augmenting the earlier "no on-device
+  interpreter" stance); the **umbilical doubles as a dev strategy** for un-owned/iOS devices;
+  **Lua-first sequencing** (bring ZUIL up via Lua, then open C++). iOS stays a *design target*
+  validated by Android proxy (no Mac on the Linux host).
+- **2026-06-10** — Web/WASM target wired & proven ([web.md](web.md)). **Spike W**: `zig build
+  -Dwasm` cross-compiles the static `libzuil.a` for `wasm32-emscripten` (translate-c against the
+  Emscripten sysroot + SDL3 *port* headers — the NDK `-isystem` trick replayed); **emcc owns the
+  final link** (`--use-port=sdl3 -g`); smoke verified headless under node (`wasm-smoke`, SDL
+  3.4.2 port) and served in-browser (`wasm-serve`), DWARF present for C *and* Zig sources.
+  Decided: **static-only on the web** (no `dlopen`) — the web joins iOS as the **second "hard
+  case"**, re-validating poll-pump / no-trampolines / PUC-Lua-static; the C-ABI pump must keep a
+  **non-blocking poll form** (browser frame-callback inversion; ASYNCIFY rejected as default);
+  **JS becomes a face** (cwrap/ccall over the same C ABI); the umbilical/REPL protocol is
+  **message-framed + transport-pluggable (WebSocket-carriable)**; a **REPL channel** is designed
+  as the umbilical's logic-injection dual with **agent-operability** (human *and* AI) an explicit
+  goal — dev-only, localhost/opt-in. Positioning recorded: liberal-use framework by construction
+  (Unlicense + mechanism-not-policy + never-runnable library).

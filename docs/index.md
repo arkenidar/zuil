@@ -18,6 +18,12 @@ Source & build instructions: <https://github.com/arkenidar/zuil>
   (a Zig+SDL3 app ran on the emulator).
 - [Bindings](bindings.md) — the wxWidgets-style multi-language story: one core, many faces over
   the C ABI.
+- [Scripting & clients](scripting.md) — cross-platform consumption: **Lua-first**, the
+  static/dynamic linkage split, **LuaJIT-FFI vs PUC-Lua C-API**, the umbilical as a dev strategy,
+  and iOS by proxy. *(LuaJIT cross-builds for Android arm64 — proven 2026-06-10.)*
+- [Web / WASM](web.md) — Emscripten as **user-target and devel-target**: the second "hard case",
+  the VS Code run/test/debug loop, the REPL-channel design. *(Step-0 wasm smoke **proven
+  2026-06-10** — node + browser, `zig build -Dwasm`.)*
 - [Analysis](analysis.md) — a curated descriptive analysis of the whole project: code-vs-design
   status, the firm vs semi-fluid decision layers, possibilities, and risks (snapshot 2026-06-10).
 
