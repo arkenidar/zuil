@@ -119,6 +119,8 @@ where the core/policy line falls:
   than) the phone thin client. **Constraint recorded now, cheap because it's early:** browsers
   cannot open raw TCP sockets, so the umbilical protocol must be **transport-pluggable and
   message-framed** — carried over TCP natively and **WebSocket** in the browser, same frames.
+  In the browser the WebSocket feeds ZUIL's event-injection primitive directly
+  ([events.md](events.md)) — the core's opt-in TCP transport is bypassed, the frames identical.
 - **Headless CI.** The node smoke (`wasm-smoke`) runs with no display and no browser — a
   continuous gate on the wasm build. Later, SDL's dummy video driver extends this to API-level
   tests beyond Step 0; pixel/interaction tests would go through browser automation (CDP /
@@ -152,7 +154,9 @@ M1+; the *shape* is fixed now so nothing forecloses it.)
 - **Relation to the umbilical**: the REPL is the **logic-injection dual** of the umbilical's
   draw-streaming — same framing discipline, opposite direction. Umbilical out: *pixels leave*
   the logic host. REPL in: *logic enters* the running host. Together they make a live instance
-  fully external-operable; the framing should be designed once and shared.
+  fully external-operable; the framing should be designed once and shared. How frames become
+  events on the pump — the injection primitive, the `message` variant — is specified in
+  [events.md](events.md); this section stays authoritative for the REPL's *purpose*.
 - **Agent-operability is an explicit design goal.** The loop *build → serve → connect → inject
   → observe (console / pixels) → iterate* must be drivable by a human and by an AI agent alike:
   keep the channel scriptable, keep observations machine-readable (structured replies, not just
@@ -219,3 +223,5 @@ and architectural liberality are one design stance, not two.
   the no-JIT/no-W^X reasoning the web now re-validates.
 - [Mobile](mobile.md) — the Android build the wasm target mirrors; soft-keyboard/IME notes.
 - [Bindings](bindings.md) — the consumer matrix the JS face joins.
+- [Events](events.md) — how umbilical/REPL frames become events: the injection primitive, the
+  opt-in transport, the async/await position.

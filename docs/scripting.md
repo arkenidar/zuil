@@ -100,6 +100,8 @@ This one shape serves **every** case: LuaJIT-FFI (no trampolines → interpreter
 PUC-Lua C-API (poll *or* callbacks, both fine), pure-Zig (native loop), desktop FFI (unchanged).
 It also *is* the "serializable input" half of the umbilical (§5). `zuil.run()`-owns-the-loop +
 registered handlers (architecture §6) becomes optional sugar layered on the pump — not the floor.
+The pump is also the delivery point for *injected* events — network/umbilical frames, REPL
+chunks, timers — see [events.md](events.md).
 
 ---
 
@@ -237,3 +239,5 @@ So: **Lua opens the way for ZUIL; ZUIL (proven via Lua) opens the way for C++.**
 - [Bindings](bindings.md) — the one-core-many-faces consumer matrix.
 - [Web / WASM](web.md) — Emscripten as user- and devel-target; the VS Code dev loop; the REPL
   channel.
+- [Events](events.md) — input, network, timers on one pump: the injection primitive, the
+  opt-in transport, the async/await position.

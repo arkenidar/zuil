@@ -46,6 +46,7 @@ write UI against once.
 | Remote-UI ("umbilical") | **Kept reachable**, not required | Via a recordable draw choke-point + serializable input (§7); also a dev strategy for un-owned/iOS devices — [scripting.md](scripting.md) |
 | Mobile linkage | **Both, selectable** — dynamic `.so` (FFI) + static `.a` (C++/iOS) | Loading model picks it: `ffi.load` needs `.so`; iOS/C++ want static |
 | On-device scripting | **Validated path**, parallel to the Zig app | LuaJIT-on-Android proven; PUC-Lua for iOS — [scripting.md](scripting.md) |
+| Networked events | **Same pump as input** — injection primitive + opt-in transport | one scheduling point; umbilical/REPL/messages/timers unified — [events.md](events.md) |
 
 ---
 
@@ -89,6 +90,9 @@ unchanged:
   pinch); note touch has no *hover*.
 - **Platform lifecycle events**: background/foreground/rotation/low-memory and **GPU-context-loss**
   (so caches/render-targets can be rebuilt).
+- **Event injection + timers**: a thread-safe, non-blocking `zuil_event_post` plus **message**
+  (channel id + framed payload) and **timer** event variants — how network/umbilical/REPL
+  traffic and scheduled wakes arrive on the *same* pump as input. See [events.md](events.md).
 
 ---
 
@@ -234,6 +238,8 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   static/dynamic linkage split, LuaJIT-FFI vs PUC-Lua C-API, the umbilical as a dev strategy, iOS.
 - **[Web / WASM](web.md)** — Emscripten as user-target and devel-target; the second "hard case";
   the VS Code dev loop and the REPL-channel design.
+- **[Events](events.md)** — input, network, timers on one pump: the injection primitive, the
+  opt-in transport module, and the async/await position (the pump as reactor).
 
 ---
 
@@ -277,3 +283,18 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   as the umbilical's logic-injection dual with **agent-operability** (human *and* AI) an explicit
   goal — dev-only, localhost/opt-in. Positioning recorded: liberal-use framework by construction
   (Unlicense + mechanism-not-policy + never-runnable library).
+- **2026-06-10** — Networked events designed ([events.md](events.md)). Decided: the pump is the
+  **single scheduling point** — umbilical/REPL traffic, generic app messages, and timers arrive
+  as **events in the same queue as input**; the core gains a **thread-safe, non-blocking
+  injection primitive** (`zuil_event_post` — bounded queue, fail-fast on full, wakes a blocking
+  wait *where one exists*) and two event variants (**message**: channel id + framed opaque
+  payload, framing shared with the umbilical/REPL, **serialization left open**; **timer**); an
+  **opt-in TCP transport module lives in core** (Zig `std.net`, zero new deps), fenced as
+  mechanism — *it moves frames, never interprets a byte* — while the browser feeds the **same
+  frames via consumer-side WebSocket** into the injection primitive. Position on **async/await**:
+  the poll pump *is* a single-threaded reactor (node-style evented I/O, consumer-owned loop); the
+  C ABI stays **poll-based and callback-free**; async/await is **consumer-side sugar** (Lua
+  coroutines flagship; asyncio / C++20 coroutines / JS Promises per face) enabled only by core
+  wakeups + timers; **correlation ids are payload-level policy**. Injection transports stay
+  **dev-only, localhost, opt-in**; security mechanics recorded as open issues. The ledger gains
+  **firmness grades** (1 = hard … 10 = soft), extending analysis.md's firm-vs-semi-fluid framing.

@@ -24,6 +24,9 @@ Source & build instructions: <https://github.com/arkenidar/zuil>
 - [Web / WASM](web.md) — Emscripten as **user-target and devel-target**: the second "hard case",
   the VS Code run/test/debug loop, the REPL-channel design. *(Step-0 wasm smoke **proven
   2026-06-10** — node + browser, `zig build -Dwasm`.)*
+- [Events](events.md) — input, network, timers on **one pump**: the event-injection primitive,
+  the opt-in transport module, umbilical/REPL/messages/timers, and the **async/await** position
+  (the pump as reactor).
 - [Analysis](analysis.md) — a curated descriptive analysis of the whole project: code-vs-design
   status, the firm vs semi-fluid decision layers, possibilities, and risks (snapshot 2026-06-10).
 
