@@ -1,4 +1,4 @@
-//! ZUIL build — the C-ABI core, emitted in both linkages, for two targets.
+//! ZUIL build — the C-ABI core, emitted in both linkages, for three targets.
 //!
 //! `zig build` (default, desktop/host): translate-c reads the system SDL3
 //! headers; the library links system SDL3 via pkg-config. BOTH linkages land in
@@ -12,20 +12,31 @@
 //! zig-out/jniLibs/arm64-v8a/libzuil.so (FFI face, loaded by SDLActivity) and
 //! zig-out/lib/arm64-v8a/libzuil.a (static, for C++/native/iOS-shaped consumers).
 //!
+//! `zig build -Dwasm`: cross-compile wasm32-emscripten against the Emscripten
+//! SDL3 port headers — the web face (docs/web.md). Needs -Demsdk=<path> or
+//! $EMSDK. Emits ONLY the static zig-out/lib/wasm32-emscripten/libzuil.a: the
+//! web has no runtime loading, so the dynamic/FFI face has no analogue there;
+//! emcc owns the final link (`wasm-smoke` runs it headless under node,
+//! `wasm-serve` serves the browser page — the VS Code dev-loop entry point).
+//!
 //! Why two linkages: the loading model — not taste — picks the artifact
-//! (`ffi.load` needs a .so; iOS/C++ want the static archive). One core, many
-//! faces over one C ABI; see docs/bindings.md.
+//! (`ffi.load` needs a .so; iOS/C++/web want the static archive). One core,
+//! many faces over one C ABI; see docs/bindings.md.
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // `zig build -Dandroid` cross-builds the arm64-v8a Android .so (links the
-    // SDL3 AAR); without it, the normal desktop build runs unchanged.
+    // SDL3 AAR); `zig build -Dwasm` cross-builds the wasm32-emscripten static
+    // archive; without either, the normal desktop build runs unchanged.
     const android = b.option(bool, "android", "Cross-build the arm64-v8a Android .so (links the SDL3 AAR)") orelse false;
+    const wasm = b.option(bool, "wasm", "Cross-build the wasm32-emscripten static .a (Emscripten SDL3 port)") orelse false;
 
     if (android) {
         buildAndroid(b, optimize);
+    } else if (wasm) {
+        buildWasm(b, optimize);
     } else {
         buildDesktop(b, optimize);
     }
@@ -186,4 +197,134 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
         });
         b.getInstallStep().dependOn(&install.step);
     }
+}
+
+/// Web build: cross-compile the same Step-0 library for wasm32-emscripten.
+/// Division of labour mirrors Android exactly — Zig builds the core archive;
+/// the platform toolchain does the platform link/packaging. Here that
+/// toolchain is emcc: it injects the JS runtime and the SDL3 *port* (the
+/// `wasm-smoke` / `wasm-serve` steps below), as Gradle/SDLActivity package the
+/// Android side. Static `.a` only: the web has no `dlopen`, so the dynamic/FFI
+/// face has no analogue (Emscripten SIDE_MODULEs exist but are out of scope) —
+/// the web joins iOS in the static-archive column. See docs/web.md.
+///
+/// Requires (via -D options or env):
+///   -Demsdk=<path>  or  $EMSDK (exported by emsdk_env.sh)  — emsdk root
+/// with the SDL3 port already materialized in the emscripten cache (any
+/// `emcc --use-port=sdl3` compile does it once; the panic below says how).
+fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
+    const emsdk = b.option([]const u8, "emsdk", "Emscripten SDK root") orelse
+        b.graph.environ_map.get("EMSDK") orelse
+        std.debug.panic("wasm build needs -Demsdk=<path> or $EMSDK (source emsdk_env.sh)", .{});
+
+    // The emscripten sysroot include carries BOTH the libc headers and —
+    // once the port has been built once — the SDL3 *port* headers (SDL3/).
+    // Using the port's headers (not the system libsdl3-dev ones) keeps the
+    // translate-c declarations in lockstep with the library emcc links.
+    const sysroot_inc = b.pathJoin(&.{ emsdk, "upstream/emscripten/cache/sysroot/include" });
+    std.Io.Dir.cwd().access(b.graph.io, b.pathJoin(&.{ sysroot_inc, "SDL3/SDL.h" }), .{}) catch
+        std.debug.panic(
+            \\SDL3 port headers not found under {s}.
+            \\Materialize the port once (downloads + caches SDL3):
+            \\  echo 'int main(void){{return 0;}}' > /tmp/p.c && emcc /tmp/p.c --use-port=sdl3 -o /tmp/p.js
+        , .{sysroot_inc});
+
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .emscripten,
+    });
+
+    // translate-c under the emscripten target: as with the NDK, the build
+    // -system TranslateC step gets the sysroot headers via -isystem. Zig has
+    // no bundled emscripten libc, so libc stays OFF for the archive (emcc
+    // provides musl-flavoured libc at final link); the -isystem path supplies
+    // every header translate-c needs, libc's included.
+    const cdefs_tc = b.addTranslateC(.{
+        .root_source_file = b.path("src/cdefs.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+    });
+    cdefs_tc.addSystemIncludePath(.{ .cwd_relative = sysroot_inc });
+    const cdefs = cdefs_tc.createModule();
+
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/zuil.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+        .imports = &.{
+            .{ .name = "cdefs", .module = cdefs },
+        },
+    });
+
+    const lib = b.addLibrary(.{
+        .name = "zuil",
+        .root_module = mod,
+        .linkage = .static,
+    });
+    const install = b.addInstallArtifact(lib, .{
+        .dest_dir = .{ .override = .{ .custom = "lib/wasm32-emscripten" } },
+    });
+    b.getInstallStep().dependOn(&install.step);
+
+    // ---- emcc-side steps (opt-in, not part of the default install) --------
+    // emcc owns the final wasm link: it brings the JS runtime, the SDL3 port
+    // library, and (-g) DWARF for the VS Code / DevTools wasm debuggers.
+    const emcc = b.pathJoin(&.{ emsdk, "upstream/emscripten/emcc" });
+
+    // `zig build -Dwasm wasm-smoke` — link smoke_web.c + libzuil.a to .js and
+    // run it headless under emsdk's bundled node (SDL_GetVersion needs no
+    // display): the web twin of `luajit examples/smoke.lua`.
+    const link_js = b.addSystemCommand(&.{emcc});
+    link_js.addFileArg(b.path("examples/smoke_web.c"));
+    link_js.addArtifactArg(lib);
+    link_js.addArgs(&.{ "--use-port=sdl3", "-g", "-o" });
+    const smoke_js = link_js.addOutputFileArg("smoke_web.js");
+
+    const run_node = b.addSystemCommand(&.{findEmsdkNode(b, emsdk)});
+    run_node.addFileArg(smoke_js);
+    b.step("wasm-smoke", "Link the web smoke with emcc and run it under node")
+        .dependOn(&run_node.step);
+
+    // `zig build -Dwasm wasm-serve` — the .html variant, served over localhost
+    // (wasm won't load from file://). Open the printed URL in the VS Code
+    // Simple Browser; -g DWARF makes the module debuggable from DevTools /
+    // js-debug. Blocks while serving, like a `zig build run` would.
+    const link_html = b.addSystemCommand(&.{emcc});
+    link_html.addFileArg(b.path("examples/smoke_web.c"));
+    link_html.addArtifactArg(lib);
+    link_html.addArgs(&.{ "--use-port=sdl3", "-g", "-o" });
+    const smoke_html = link_html.addOutputFileArg("smoke_web.html");
+
+    const web_files = b.addInstallDirectory(.{
+        .source_dir = smoke_html.dirname(),
+        .install_dir = .prefix,
+        .install_subdir = "web",
+    });
+
+    const serve = b.addSystemCommand(&.{
+        "python3",        "-m", "http.server", "8080",
+        "--bind", "127.0.0.1", "-d",
+    });
+    serve.addArg(b.getInstallPath(.prefix, "web"));
+    serve.step.dependOn(&web_files.step);
+    b.step("wasm-serve", "Serve the web smoke at http://127.0.0.1:8080/smoke_web.html")
+        .dependOn(&serve.step);
+}
+
+/// emsdk bundles its own node under <emsdk>/node/<version>_64bit/bin/node;
+/// the version directory changes with emsdk releases, so discover it rather
+/// than pin it (the tool shell has no node of its own).
+fn findEmsdkNode(b: *std.Build, emsdk: []const u8) []const u8 {
+    const node_root = b.pathJoin(&.{ emsdk, "node" });
+    var dir = std.Io.Dir.cwd().openDir(b.graph.io, node_root, .{ .iterate = true }) catch
+        std.debug.panic("wasm-smoke needs emsdk's bundled node; none at {s}", .{node_root});
+    defer dir.close(b.graph.io);
+    var it = dir.iterate();
+    while (it.next(b.graph.io) catch null) |entry| {
+        if (entry.kind == .directory)
+            return b.pathJoin(&.{ node_root, entry.name, "bin/node" });
+    }
+    std.debug.panic("no node version directory under {s}", .{node_root});
 }
