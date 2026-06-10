@@ -28,20 +28,40 @@ struct ABI, UTF-8 throughout).
 ## Build & run
 
 ```sh
-zig build                  # -> zig-out/lib/libzuil.so   (links libSDL3.so.0)
-luajit examples/smoke.lua  # loads the lib via FFI, prints the linked SDL3 version
+zig build                  # -> zig-out/lib/{libzuil.so, libzuil.a}  (links system SDL3)
+luajit examples/smoke.lua  # loads libzuil.so via FFI, prints the linked SDL3 version
+python3 examples/smoke.py  # same check, via ctypes
 ```
 
-Expected output:
+Expected output (both):
 
 ```
 ZUIL ok - linked SDL3 version = 3002010  (3.2.10)
 ```
 
+`zig build` emits the C-ABI core in **both linkages** — a consumer picks one: `libzuil.so`
+(dynamic → LuaJIT `ffi.load`, Python ctypes) and `libzuil.a` (static → C++, native, a PUC-Lua
+C-API module). See [docs/bindings.md](docs/bindings.md).
+
+### Android (cross-build)
+
+Cross-compile the `arm64-v8a` libraries against the prebuilt **SDL3 Android AAR** (needs `unzip`):
+
+```sh
+zig build -Dandroid -Dndk=<NDK_ROOT> -Daar=<path/to/SDL3-*-android.aar>
+# or via env:  ANDROID_NDK_HOME / ANDROID_NDK_ROOT  and  ZUIL_SDL3_AAR
+# -> zig-out/jniLibs/arm64-v8a/libzuil.so   (FFI face, loaded by SDLActivity)
+#    zig-out/lib/arm64-v8a/libzuil.a        (static, for C++/native/iOS-shaped consumers)
+```
+
+`-Dandroid-api=<N>` sets the minSdk / crt API level (default 21). The mechanics — translate-c
+against the AAR headers under the Android target, a `--libc` file pointing at the NDK sysroot,
+linking the AAR's `libSDL3.so` — are in [docs/mobile.md](docs/mobile.md).
+
 ## Layout
 
 ```
-build.zig, build.zig.zon   Zig 0.17-dev build; emits libzuil.so
+build.zig, build.zig.zon   Zig 0.17-dev build; emits libzuil.{so,a} (+ Android via -Dandroid)
 src/cdefs.h                SDL3 header for the translate-c step
 src/zuil.zig               the exported C ABI  (Step 0: zuil_sdl_version)
 examples/smoke.lua         LuaJIT FFI smoke test
