@@ -220,7 +220,8 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   (`examples/smoke.py`).
 - **M1 — mechanism + window.** Window, the `zuil.run()` loop (immediate, continuous redraw by
   default), input snapshot + event queue, draw vocabulary, clip, id/hit-test/focus registry. A
-  first immediate-mode demo.
+  first immediate-mode demo. **Execution plan: [m1.md](m1.md)** — spike-first sub-steps,
+  smoke gates, and the milestone fence.
 - **M2 — text + pixels.** SDL3_ttf text measurement/draw + IME; `blit_rgba` software framebuffer.
 - **Widget module.** An optional user-space immediate-mode widget set; a retained convention
   documented alongside for forms/text.
@@ -318,3 +319,13 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   the predecessor, which proved them locally); zig-sdl-gui ingredients given explicit
   **adopt/adapt/reject** verdicts (purity-as-requirement stays rejected). Sequencing recorded
   U0–U4 (doc → desktop spike → `adb reverse` host → eval/log → thin client).
+- **2026-06-10** — M1 execution plan ([m1.md](m1.md)) — the milestone zoomed into gated
+  sub-steps before code. Decided: **spike-first ordering** — Spike E (the event struct across
+  four FFIs, no SDL in the build) and Spike P (the pump inverted under the Emscripten frame
+  callback) report *before* draw/input are built; the **core/veneer split (`src/c_abi.zig`)
+  lands at M1.0**, while there is one symbol to move; the **`message`/`timer` enum slots and
+  semantics are M1 scope** even though transports stay post-M1 (gate = the local half of
+  events.md's REPL smoke, no socket); every sub-step is **smoke-gated across faces** (LuaJIT +
+  Python always; wasm/Android on pump/ABI-touching steps); **raw-struct vs accessor-fn event
+  ABI is a named open decision** until Spike E measures it; M1.7's button demo is the
+  **fence test** — it must need zero core additions or the mechanism/policy line is wrong.

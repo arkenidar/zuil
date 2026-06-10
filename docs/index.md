@@ -30,13 +30,16 @@ Source & build instructions: <https://github.com/arkenidar/zuil>
 - [Umbilical](umbilical.md) — **script deployment & remote dev cycling**: logic-push first, the
   channel catalogue (script/logs/eval/assets), topologies incl. `adb reverse` and VPS, the
   framed-TCP-push protocol with HTTP-pull fallback, and **debugging as procedures**.
+- [M1 plan](m1.md) — the **M1 execution plan**: spike-first sub-steps (events-ABI, wasm pump
+  inversion), the smoke-gate matrix, and what is fenced out of the milestone.
 - [Analysis](analysis.md) — a curated descriptive analysis of the whole project: code-vs-design
   status, the firm vs semi-fluid decision layers, possibilities, and risks (snapshot 2026-06-10).
 
 ## Status
 
 Early bootstrap. **Step 0** (build / link / FFI pipeline) is done and verified; **M1** (the UI
-core — window + `zuil.run()` loop + the `on_paint`/`on_key`/`on_mouse` drawing vocabulary) is next.
+core — window + `zuil.run()` loop + the `on_paint`/`on_key`/`on_mouse` drawing vocabulary) is
+next — its gated execution plan is [m1.md](m1.md).
 
 ---
 
