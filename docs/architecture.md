@@ -329,3 +329,18 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   Python always; wasm/Android on pump/ABI-touching steps); **raw-struct vs accessor-fn event
   ABI is a named open decision** until Spike E measures it; M1.7's button demo is the
   **fence test** — it must need zero core additions or the mechanism/policy line is wrong.
+- **2026-06-10** — **Dual-implementation core — C first.** The C ABI became a real artifact:
+  `include/zuil.h` is **the contract**, with **two interchangeable implementations** behind it —
+  `src/zuil.c` (C) and `src/zuil.zig` (Zig) — selected per build via `-Dimpl` (**default = c**).
+  Why: the pinned Zig *dev* toolchain is the project's most fragile dependency (build-API churn
+  between snapshots); a C core compiles with **any** C compiler (gcc / NDK clang / emcc — gcc
+  spot-checked end-to-end through LuaJIT FFI), so if Zig ever stalls, `build.zig` degrades to
+  *convenience, not dependency* and the project keeps moving. The fallback ladder this buys:
+  re-pin / ride to stable Zig → keep compiling C via `zig cc` → any C compiler + any build
+  driver. Zig remains a first-class implementation, and **one-core-two-faces survives either
+  way**: the idiomatic Zig face can sit on the Zig impl directly *or* wrap the C core through
+  translate-c, exactly as every other consumer wraps the header. Both impls smoke-gated on all
+  three targets (desktop LuaJIT + ctypes; wasm node smoke; Android arm64 link + symbol).
+  Invariant added: **the header is the single source of truth — implementations must not
+  diverge from it**, and M1 sub-steps land in *both* impls or the C one explicitly leads with
+  the Zig twin trailing in the same sub-step.

@@ -22,7 +22,18 @@
 //! Why two linkages: the loading model — not taste — picks the artifact
 //! (`ffi.load` needs a .so; iOS/C++/web want the static archive). One core,
 //! many faces over one C ABI; see docs/bindings.md.
+//!
+//! `-Dimpl=c|zig` (default **c**) picks which implementation of that ABI goes
+//! into the artifacts: src/zuil.c or src/zuil.zig — twins behind the
+//! include/zuil.h contract. C is the default as the toolchain hedge (see the
+//! 2026-06-10 decision-log entry in docs/architecture.md): the C source
+//! compiles with any C compiler, so if the pinned Zig dev build ever becomes
+//! a stopper, this file degrades to convenience rather than dependency.
 const std = @import("std");
+
+/// The two interchangeable implementations of the C ABI. Selecting one is a
+/// build-time choice; consumers cannot (and must not) tell them apart.
+const Impl = enum { c, zig };
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
@@ -32,44 +43,67 @@ pub fn build(b: *std.Build) void {
     // archive; without either, the normal desktop build runs unchanged.
     const android = b.option(bool, "android", "Cross-build the arm64-v8a Android .so (links the SDL3 AAR)") orelse false;
     const wasm = b.option(bool, "wasm", "Cross-build the wasm32-emscripten static .a (Emscripten SDL3 port)") orelse false;
+    const impl = b.option(Impl, "impl", "Core implementation: c (default, toolchain hedge) or zig — same C ABI") orelse .c;
 
     if (android) {
-        buildAndroid(b, optimize);
+        buildAndroid(b, optimize, impl);
     } else if (wasm) {
-        buildWasm(b, optimize);
+        buildWasm(b, optimize, impl);
     } else {
-        buildDesktop(b, optimize);
+        buildDesktop(b, optimize, impl);
     }
 }
 
-/// Desktop build: translate-c reads the system SDL3 headers (libsdl3-dev) and
-/// the library links system SDL3 via pkg-config. Host target.
-fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
+/// One core module per (impl, target). The C impl compiles src/zuil.c against
+/// include/zuil.h (the contract checks the implementation); the Zig impl
+/// compiles src/zuil.zig against `cdefs`, the target's translate-c module
+/// (pass null for the C impl — it includes the SDL3 headers directly, so the
+/// caller hands it the right include paths instead).
+fn coreModule(b: *std.Build, impl: Impl, cdefs: ?*std.Build.Module, opts: std.Build.Module.CreateOptions) *std.Build.Module {
+    var o = opts;
+    if (impl == .zig) o.root_source_file = b.path("src/zuil.zig");
+    const mod = b.createModule(o);
+    switch (impl) {
+        .zig => mod.addImport("cdefs", cdefs.?),
+        .c => {
+            mod.addCSourceFile(.{ .file = b.path("src/zuil.c") });
+            mod.addIncludePath(b.path("include"));
+        },
+    }
+    return mod;
+}
+
+/// Desktop build: the library links system SDL3 (libsdl3-dev) via pkg-config.
+/// Host target. The Zig impl reads the headers through translate-c; the C impl
+/// includes them directly (pkg-config supplies the cflags either way).
+fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) void {
     const target = b.standardTargetOptions(.{});
 
-    // C interop via translate-c (this Zig dev build uses it in place of @cImport).
-    // The created module both translates the SDL3 header and links the system lib.
-    const cdefs_tc = b.addTranslateC(.{
-        .root_source_file = b.path("src/cdefs.h"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    cdefs_tc.linkSystemLibrary("sdl3", .{});
-    const cdefs = cdefs_tc.createModule();
+    // Zig impl only: C interop via translate-c (this Zig dev build uses it in
+    // place of @cImport). The created module both translates the SDL3 header
+    // and links the system lib.
+    const cdefs: ?*std.Build.Module = if (impl == .zig) blk: {
+        const cdefs_tc = b.addTranslateC(.{
+            .root_source_file = b.path("src/cdefs.h"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cdefs_tc.linkSystemLibrary("sdl3", .{});
+        break :blk cdefs_tc.createModule();
+    } else null;
 
     // Emit both linkages of the C-ABI face (the consumer selects one):
     //   libzuil.so (dynamic) → LuaJIT FFI / Python ctypes;  libzuil.a (static) → C++/native.
     inline for (.{ std.builtin.LinkMode.dynamic, .static }) |linkage| {
-        const mod = b.createModule(.{
-            .root_source_file = b.path("src/zuil.zig"),
+        const mod = coreModule(b, impl, cdefs, .{
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .imports = &.{
-                .{ .name = "cdefs", .module = cdefs },
-            },
         });
+        // The C impl gets SDL3's include flags + link from pkg-config here
+        // (the Zig impl already carries them on the cdefs module).
+        if (impl == .c) mod.linkSystemLibrary("sdl3", .{});
 
         // Step 0: a do-nothing library that links SDL3 and exports one symbol.
         const lib = b.addLibrary(.{
@@ -95,7 +129,7 @@ const aar_arm64_libdir = "prefab/modules/SDL3-shared/libs/android.arm64-v8a";
 ///   -Dndk=<path>  or  $ANDROID_NDK_HOME / $ANDROID_NDK_ROOT  — Android NDK root
 ///   -Daar=<path>  or  $ZUIL_SDL3_AAR                         — SDL3-*-android .aar
 /// and `unzip` on PATH (used to slice the AAR).
-fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
+fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) void {
     const ndk = b.option([]const u8, "ndk", "Android NDK root") orelse
         b.graph.environ_map.get("ANDROID_NDK_HOME") orelse
         b.graph.environ_map.get("ANDROID_NDK_ROOT") orelse
@@ -145,38 +179,44 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     const sdl_headers = aar_root.path(b, aar_headers_subpath);
     const sdl_libdir = aar_root.path(b, aar_arm64_libdir);
 
-    // translate-c under the Android target: the build-system TranslateC step
-    // does not forward a --libc file, so point clang at the NDK sysroot headers
-    // via -isystem (base + arch), and neuter bionic's nullability keywords,
-    // which Zig's bundled clang rejects in array-size position (e.g.
-    // `__times[_Nullable 2]` in <sys/time.h>). Verified end-to-end (10k+ lines,
-    // SDL_GetVersion present).
-    const cdefs_tc = b.addTranslateC(.{
-        .root_source_file = b.path("src/cdefs.h"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    cdefs_tc.defineCMacro("_Nullable", "");
-    cdefs_tc.defineCMacro("_Nonnull", "");
-    cdefs_tc.defineCMacro("_Null_unspecified", "");
-    cdefs_tc.addSystemIncludePath(.{ .cwd_relative = inc });
-    cdefs_tc.addSystemIncludePath(.{ .cwd_relative = arch_inc });
-    cdefs_tc.addIncludePath(sdl_headers);
-    const cdefs = cdefs_tc.createModule();
+    // Zig impl only — translate-c under the Android target: the build-system
+    // TranslateC step does not forward a --libc file, so point clang at the
+    // NDK sysroot headers via -isystem (base + arch), and neuter bionic's
+    // nullability keywords, which Zig's *translate-c* rejects in array-size
+    // position (e.g. `__times[_Nullable 2]` in <sys/time.h>) — plain C
+    // compilation (the C impl below) accepts them fine, being a clang
+    // extension. Verified end-to-end (10k+ lines, SDL_GetVersion present).
+    const cdefs: ?*std.Build.Module = if (impl == .zig) blk: {
+        const cdefs_tc = b.addTranslateC(.{
+            .root_source_file = b.path("src/cdefs.h"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cdefs_tc.defineCMacro("_Nullable", "");
+        cdefs_tc.defineCMacro("_Nonnull", "");
+        cdefs_tc.defineCMacro("_Null_unspecified", "");
+        cdefs_tc.addSystemIncludePath(.{ .cwd_relative = inc });
+        cdefs_tc.addSystemIncludePath(.{ .cwd_relative = arch_inc });
+        cdefs_tc.addIncludePath(sdl_headers);
+        break :blk cdefs_tc.createModule();
+    } else null;
 
     // Emit both arm64 linkages: dynamic libzuil.so (FFI, into jniLibs/) and static
     // libzuil.a (C++ / native / PUC-Lua module / iOS-shaped consumers, into lib/).
     inline for (.{ std.builtin.LinkMode.dynamic, .static }) |linkage| {
-        const mod = b.createModule(.{
-            .root_source_file = b.path("src/zuil.zig"),
+        const mod = coreModule(b, impl, cdefs, .{
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .imports = &.{
-                .{ .name = "cdefs", .module = cdefs },
-            },
         });
+        // The C impl compiles against the same headers translate-c read: the
+        // NDK sysroot (bionic) plus the AAR's SDL3 headers.
+        if (impl == .c) {
+            mod.addSystemIncludePath(.{ .cwd_relative = inc });
+            mod.addSystemIncludePath(.{ .cwd_relative = arch_inc });
+            mod.addIncludePath(sdl_headers);
+        }
         // Link the AAR's prebuilt arm64 libSDL3.so (-L<dir> -lSDL3); no pkg-config
         // for a cross target. (For the static .a this is recorded for dependents;
         // the archive holds only ZUIL's objects — the consumer links SDL3 itself.)
@@ -212,7 +252,7 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
 ///   -Demsdk=<path>  or  $EMSDK (exported by emsdk_env.sh)  — emsdk root
 /// with the SDL3 port already materialized in the emscripten cache (any
 /// `emcc --use-port=sdl3` compile does it once; the panic below says how).
-fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
+fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) void {
     const emsdk = b.option([]const u8, "emsdk", "Emscripten SDK root") orelse
         b.graph.environ_map.get("EMSDK") orelse
         std.debug.panic("wasm build needs -Demsdk=<path> or $EMSDK (source emsdk_env.sh)", .{});
@@ -234,29 +274,30 @@ fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
         .os_tag = .emscripten,
     });
 
-    // translate-c under the emscripten target: as with the NDK, the build
-    // -system TranslateC step gets the sysroot headers via -isystem. Zig has
-    // no bundled emscripten libc, so libc stays OFF for the archive (emcc
-    // provides musl-flavoured libc at final link); the -isystem path supplies
-    // every header translate-c needs, libc's included.
-    const cdefs_tc = b.addTranslateC(.{
-        .root_source_file = b.path("src/cdefs.h"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = false,
-    });
-    cdefs_tc.addSystemIncludePath(.{ .cwd_relative = sysroot_inc });
-    const cdefs = cdefs_tc.createModule();
+    // Zig impl only — translate-c under the emscripten target: as with the
+    // NDK, the build-system TranslateC step gets the sysroot headers via
+    // -isystem. Zig has no bundled emscripten libc, so libc stays OFF for the
+    // archive (emcc provides musl-flavoured libc at final link); the -isystem
+    // path supplies every header translate-c needs, libc's included.
+    const cdefs: ?*std.Build.Module = if (impl == .zig) blk: {
+        const cdefs_tc = b.addTranslateC(.{
+            .root_source_file = b.path("src/cdefs.h"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = false,
+        });
+        cdefs_tc.addSystemIncludePath(.{ .cwd_relative = sysroot_inc });
+        break :blk cdefs_tc.createModule();
+    } else null;
 
-    const mod = b.createModule(.{
-        .root_source_file = b.path("src/zuil.zig"),
+    const mod = coreModule(b, impl, cdefs, .{
         .target = target,
         .optimize = optimize,
         .link_libc = false,
-        .imports = &.{
-            .{ .name = "cdefs", .module = cdefs },
-        },
     });
+    // The C impl compiles against the same emscripten sysroot headers
+    // (libc's + the SDL3 port's) that translate-c read for the Zig impl.
+    if (impl == .c) mod.addSystemIncludePath(.{ .cwd_relative = sysroot_inc });
 
     const lib = b.addLibrary(.{
         .name = "zuil",
