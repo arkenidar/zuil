@@ -9,7 +9,11 @@ is for); ZUIL borrows the model's good ideas and drops its baggage (no `*W`/UTF-
 struct ABI, UTF-8 throughout).
 
 > **Status: early bootstrap.** Step 0 — the build / link / FFI pipeline — is complete and
-> verified. The UI layer itself (windowing, events, drawing) is the next milestone.
+> verified. A **desktop M1 slice** (window + frame pump + draw vocabulary + input snapshot +
+> clip/transform) has since landed in the Zig impl, exercised by an interactive demo —
+> `examples/grab-move/` (run with `zig build -Dimpl=zig && luajit examples/grab-move/main.lua`).
+> Completing M1 properly (the spikes, the 4-face smoke matrix, dual-impl lockstep, the ABI
+> freeze) is the next milestone — see [docs/m1.md](docs/m1.md).
 
 ## Why
 
@@ -66,6 +70,7 @@ src/cdefs.h                SDL3 header for the translate-c step
 src/zuil.zig               the exported C ABI  (Step 0: zuil_sdl_version)
 examples/smoke.lua         LuaJIT FFI smoke test
 examples/smoke.py          Python/ctypes smoke test (same output)
+examples/grab-move/        interactive desktop M1 demo (grab-move ported onto zuil)
 docs/architecture.md       design decisions & widget model (read this)
 ```
 

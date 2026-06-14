@@ -13,11 +13,23 @@ throughout, no `*W`/UTF-16, no fixed struct ABI).
 
 ## ⚠️ Read this before touching the API
 
-**The design docs describe a plan that is mostly NOT implemented yet.** Only
-**Step 0** exists in code: `zuil_sdl_version()` in `include/zuil.h`, implemented
-twice (`src/zuil.c`, `src/zuil.zig`). `zuil.run()`, the draw vocabulary,
-`src/c_abi.zig`, the input snapshot, and the widget set are **designed in
-`docs/`, not built.** Do not assume any of them exist — grep first.
+**The design docs describe a plan that is only partly implemented.** What
+exists in code (grep `include/zuil.h` for the current surface):
+
+- **Step 0**: `zuil_sdl_version()`, implemented in both `src/zuil.c` and `src/zuil.zig`.
+- **A desktop M1 slice (landed 2026-06-14, Zig-only)**: window + poll-style frame pump
+  (`zuil_window_open/close`, `zuil_frame_begin/end`), draw vocab (`set_color/clear/fill_rect/
+  draw_rect/draw_line`), an input snapshot **as accessor functions** (`mouse_x/y`,
+  `mouse_down/pressed/released`, `key_pressed`, `should_quit`), and a clip + 2-D translation
+  stack (`clip_push/pop`, `push/pop/translate`). Driven by `examples/grab-move/` (LuaJIT). See
+  `docs/architecture.md` §10 (2026-06-14) for the rationale and the deviations from `m1.md`.
+
+**⚠️ The M1 slice is Zig-only — `src/zuil.c` is behind the header.** It was implemented
+`-Dimpl=zig`-first by owner choice; the C twin was *not* updated, so `zig build -Dimpl=c`
+exports only `zuil_sdl_version`. The lockstep invariant is intentionally, temporarily broken
+for these symbols. **Still designed-not-built**: `src/c_abi.zig` core/veneer split, `event_post`/
+message/timer, the `hot`/`active`/`focused` id-registry, text/IME, `blit_rgba`, the widget
+module — grep before assuming any exist.
 
 `docs/architecture.md` is the authoritative design record (mechanism vs policy,
 immediate-mode default, one-core-two-faces). Read it before extending the API;
@@ -45,6 +57,12 @@ update its dated **decision log** when a design choice changes.
     python3 examples/smoke.py   # ctypes smoke test (same output)
 
 Expected: `ZUIL ok - linked SDL3 version = 3002010  (3.2.10)`
+
+Desktop M1 demo (Zig impl only — see the API-status note above):
+
+    zig build -Dimpl=zig
+    luajit examples/grab-move/main.lua        # interactive grab-move on zuil
+    luajit examples/grab-move/main.lua 60     # frame-capped (headless smoke)
 
 `-Dimpl` composes with `-Dandroid` / `-Dwasm`; ABI-touching changes must pass
 the smokes under **both** impls (the verified hedge: `gcc -shared src/zuil.c`

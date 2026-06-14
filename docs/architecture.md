@@ -344,3 +344,30 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   Invariant added: **the header is the single source of truth — implementations must not
   diverge from it**, and M1 sub-steps land in *both* impls or the C one explicitly leads with
   the Zig twin trailing in the same sub-step.
+- **2026-06-14** — **Zig-first desktop M1 slice, driven by `grab-move` as acceptance test.**
+  Implemented a desktop window+draw+input mechanism directly in `src/zuil.zig` as
+  `export fn … callconv(.c)` (the emitted symbols are a plain C ABI — LuaJIT consumes them
+  unchanged), and **inverted the C-first stance for this work**: the standalone C twin
+  (`src/zuil.c`) is *not* maintained for this slice; `include/zuil.h` remains the single source
+  of truth. Rationale: owner preference + Zig ergonomics, and Zig's C-ABI is sufficient for the
+  FFI faces; C stays as the optional toolchain-fragility hedge, portable later if wanted.
+  **Landed exports:** `zuil_window_open/close`, `zuil_frame_begin/end` (poll-style,
+  callback-free, consumer owns the loop), draw vocab (`set_color/clear/fill_rect/draw_rect/
+  draw_line`), input snapshot **as accessors** (`mouse_x/y`, `mouse_down/pressed/released`,
+  `key_pressed`, `should_quit`), and a clip + 2-D **translation** stack
+  (`clip_push/pop`, `push/pop/translate`). Acceptance test: an adapted, rect-only rewrite of
+  the LÖVE2D `grab-move` GUI runs over these (`examples/grab-move/{zuil.lua,main.lua}`) —
+  draggable handles with bring-to-front + delete, exclusive mutex tabs, and a clipped draggable
+  panel. **What this falsified / confirmed vs `m1.md`:** (a) the *snapshot-via-accessor* shape
+  is sufficient for a real immediate-mode GUI and **sidesteps Spike E** (no event struct
+  crosses the ABI; `pressed` gives the click-edge natively, retiring grab-move's hand-rolled
+  `click_down`) — accessors stay *soft*, to be confirmed by a 2nd/3rd FFI face and re-opened by
+  M1.5's `event_post`/message/timer; (b) the **transform stack fell out cheaply** as a CPU
+  offset applied in the draw wrappers (SDL3's 2D renderer has no matrix stack) — so it did
+  *not* need to wait for M2; (c) **deliberate deviations for speed**, recorded as debt: M1.0
+  (`c_abi.zig` core/veneer split) **skipped**, the 4-face smoke matrix reduced to **desktop +
+  LuaJIT only**, and Spike P deferred (wasm-only). The `hot`/`active`/`focused` id-registry was
+  *not* needed — grab-move does its own hit-test + z-order in user-space, reinforcing the
+  mechanism-not-policy line. Text/IME, `blit_rgba`, and the TCL/ticoluna re-expression are
+  designed but deferred (no pixels added). Build/run: `zig build -Dimpl=zig`, then
+  `luajit examples/grab-move/main.lua`.
