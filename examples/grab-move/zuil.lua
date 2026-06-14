@@ -32,7 +32,23 @@ ffi.cdef([[
   void zuil_translate(float dx, float dy);
 ]])
 
-local C = ffi.load("./zig-out/lib/libzuil.so")
+-- Resolve libzuil across build flows: the gcc hedge and Linux `zig build` emit
+-- zig-out/lib/libzuil.so; Windows `zig build` emits a self-contained
+-- zig-out/bin/zuil.dll. Try each so either build runs the demo (cwd = root).
+local candidates = {
+  "./zig-out/lib/libzuil.so",
+  "./zig-out/bin/zuil.dll",
+  "./zig-out/lib/libzuil.dylib",
+}
+local C
+for _, path in ipairs(candidates) do
+  local ok, lib = pcall(ffi.load, path)
+  if ok then C = lib; break end
+end
+if not C then
+  error("zuil: no library found — build it first (zig build, or the gcc hedge). Tried: "
+        .. table.concat(candidates, ", "))
+end
 
 local zuil = {}
 

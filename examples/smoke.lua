@@ -4,7 +4,23 @@ local ffi = require("ffi")
 
 ffi.cdef([[ int zuil_sdl_version(void); ]])
 
-local zuil = ffi.load("./zig-out/lib/libzuil.so")
+-- Resolve libzuil across build flows: the gcc hedge and Linux `zig build` emit
+-- zig-out/lib/libzuil.so; Windows `zig build` emits a self-contained
+-- zig-out/bin/zuil.dll. Try each so either build runs the smoke (cwd = root).
+local candidates = {
+  "./zig-out/lib/libzuil.so",
+  "./zig-out/bin/zuil.dll",
+  "./zig-out/lib/libzuil.dylib",
+}
+local zuil
+for _, path in ipairs(candidates) do
+  local ok, lib = pcall(ffi.load, path)
+  if ok then zuil = lib; break end
+end
+if not zuil then
+  error("zuil: no library found — build it first (zig build, or the gcc hedge). Tried: "
+        .. table.concat(candidates, ", "))
+end
 local v = zuil.zuil_sdl_version()
 
 print(string.format(

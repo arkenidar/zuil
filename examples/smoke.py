@@ -10,7 +10,22 @@ import ctypes
 import os
 
 here = os.path.dirname(os.path.abspath(__file__))
-lib_path = os.path.join(here, os.pardir, "zig-out", "lib", "libzuil.so")
+root = os.path.join(here, os.pardir)
+
+# Resolve libzuil across build flows: the gcc hedge and Linux `zig build` emit
+# zig-out/lib/libzuil.so; Windows `zig build` emits a self-contained
+# zig-out/bin/zuil.dll; macOS would be a .dylib. Try each so any build runs.
+candidates = [
+    os.path.join(root, "zig-out", "lib", "libzuil.so"),
+    os.path.join(root, "zig-out", "bin", "zuil.dll"),
+    os.path.join(root, "zig-out", "lib", "libzuil.dylib"),
+]
+lib_path = next((p for p in candidates if os.path.exists(p)), None)
+if lib_path is None:
+    raise SystemExit(
+        "zuil: no library found — build it first (`zig build`, or the gcc hedge).\n"
+        "Tried:\n  " + "\n  ".join(os.path.normpath(p) for p in candidates)
+    )
 
 zuil = ctypes.CDLL(lib_path)
 zuil.zuil_sdl_version.restype = ctypes.c_int
