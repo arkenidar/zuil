@@ -23,8 +23,11 @@ struct ABI, UTF-8 throughout).
 
 ## Requirements
 
-- **Zig 0.17.0-dev** (uses translate-c, `createModule`/`root_module`, `addLibrary`); the exact
-  dev build is pinned in `build.zig.zon`.
+- **Zig 0.17.0-dev** — the *recommended* build driver (uses translate-c,
+  `createModule`/`root_module`, `addLibrary`); the exact dev build is pinned in
+  `build.zig.zon`. Not strictly required: the C core compiles with **any** C compiler,
+  so you can build the desktop library with one `gcc` line if Zig is unavailable or its
+  pinned dev API has drifted — see [Building without Zig](#building-without-zig).
 - **SDL3** development libraries — Debian/Ubuntu: `libsdl3-dev` (later milestones also
   `libsdl3-ttf-dev`). pkg-config name: `sdl3`.
 - **LuaJIT** — to run the examples.
@@ -46,6 +49,34 @@ ZUIL ok - linked SDL3 version = 3002010  (3.2.10)
 `zig build` emits the C-ABI core in **both linkages** — a consumer picks one: `libzuil.so`
 (dynamic → LuaJIT `ffi.load`, Python ctypes) and `libzuil.a` (static → C++, native, a PUC-Lua
 C-API module). See [docs/bindings.md](docs/bindings.md).
+
+### Building without Zig
+
+`build.zig` is convenience, not a dependency. C-first is the project's deliberate
+**toolchain hedge** — the Zig *dev* build is its most fragile pin, so the C core
+(`src/zuil.c`, kept in lockstep with `include/zuil.h`) compiles with any C compiler.
+If `zig` is missing — or, as happens, its pinned dev API drifts and `zig build` breaks —
+one `gcc` line still produces a working desktop library and runs every example:
+
+```sh
+mkdir -p zig-out/lib
+gcc -shared -Iinclude -o zig-out/lib/libzuil.so src/zuil.c $(pkg-config --cflags --libs sdl3)
+luajit examples/smoke.lua        # or: python3 examples/smoke.py
+luajit examples/grab-move/main.lua 60   # the full M1 demo, gcc-built, zero Zig
+```
+
+`cc`, `clang`, or even `zig cc -shared …` are drop-in for `gcc` (the middle rungs of the
+fallback ladder). Because `src/zuil.c` mirrors the header, this exports the **full M1
+surface** (window/draw/input/clip/transform), not just Step 0. The version line may report
+a different SDL3 than the `3.2.10` above — it shows *your* linked SDL3.
+
+Scope: this hand build covers the **desktop `.so` only**. The `-Dimpl=c|zig` switch and the
+Android / wasm cross-builds still go through `build.zig`.
+
+> **Windows / MSYS2 MINGW64:** the same line produces a PE DLL *named* `libzuil.so`, which
+> `ffi.load` / `ctypes.CDLL` load fine by path. At runtime `SDL3.dll` must resolve, so put
+> the MinGW bin dir on `PATH` (`export PATH="/c/msys64/mingw64/bin:$PATH"`); install the
+> matching `mingw-w64-x86_64-luajit`.
 
 ### Android (cross-build)
 

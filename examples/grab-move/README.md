@@ -15,6 +15,23 @@ luajit examples/grab-move/main.lua   # interactive
 luajit examples/grab-move/main.lua 60   # optional: auto-stop after 60 frames (headless smoke)
 ```
 
+### Without Zig
+
+This demo needs no Zig toolchain — it loads `zig-out/lib/libzuil.so` by path, and the
+C core (`src/zuil.c`) builds that with any C compiler. If `zig build` is unavailable or
+broken, hand-build the library first and run the demo unchanged:
+
+```sh
+mkdir -p zig-out/lib
+gcc -shared -Iinclude -o zig-out/lib/libzuil.so src/zuil.c $(pkg-config --cflags --libs sdl3)
+luajit examples/grab-move/main.lua      # or `… main.lua 60` for the headless smoke
+```
+
+`src/zuil.c` is in lockstep with the header, so the full M1 surface this demo exercises
+is present. See [**Building without Zig**](../../README.md#building-without-zig) for the
+fallback ladder and the Windows/MSYS2 note (`SDL3.dll` on `PATH`,
+`mingw-w64-x86_64-luajit`).
+
 ## What it demonstrates
 
 - **Draggable handles** — drag to move; grabbing brings a handle to front and tints it red.

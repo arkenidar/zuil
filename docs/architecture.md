@@ -383,3 +383,23 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   lockstep invariant holds again. **Still open as designed-not-built**: `src/c_abi.zig`
   core/veneer split (so the two faces share one core instead of two hand-kept twins), the 4-face
   smoke matrix, Spike P (wasm), `event_post`/message/timer, and the id-registry.
+- **2026-06-14** — **Hedge fired and held — full M1 slice built with zero Zig.** An
+  installed Zig newer than the pin (`0.17.0-dev.857` vs `…-dev.389`) broke `zig build`
+  outright (`build.zig:351` calls `getInstallPath`, an API that churned out from under
+  the pin) — exactly the toolchain-fragility scenario the C-first stance exists for. The
+  fallback ladder worked as designed: skip `build.zig`, compile the C twin straight to a
+  shared library —
+  `gcc -shared -Iinclude -o zig-out/lib/libzuil.so src/zuil.c $(pkg-config --cflags --libs sdl3)` —
+  and it ran `examples/smoke.{lua,py}` *and* drove `examples/grab-move/` interactively.
+  This **promotes the earlier hedge claim**: the 2026-06-10 entry above recorded gcc only
+  "spot-checked end-to-end" for **Step 0** (`zuil_sdl_version`); it is now verified for the
+  **whole M1 surface** (window/draw/input/clip/transform), because `src/zuil.c` is in
+  lockstep with the header. Environment: Windows/MSYS2 MINGW64, gcc 15.2.0, SDL3 3.4.4
+  (so the smoke prints `3004004`, not the pinned-desktop `3.2.10` — version is whatever you
+  link). One portability nuance recorded: on Windows the output is a PE DLL merely *named*
+  `libzuil.so` (LuaJIT `ffi.load` / ctypes `CDLL` load it by path regardless), and `SDL3.dll`
+  must be on `PATH` at runtime. Scope unchanged: the hand build covers the desktop `.so`
+  only; `-Dimpl`, Android, and wasm still need `build.zig`. Documented as a first-class
+  path in `README.md`, `CLAUDE.md`, and `examples/grab-move/README.md`. (`build.zig` itself
+  remains broken against this Zig — re-pin or update `getInstallPath` to fix the convenience
+  driver; the hedge is what kept that from being a blocker.)

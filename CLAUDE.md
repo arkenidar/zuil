@@ -67,8 +67,23 @@ Desktop M1 demo (Zig impl only — see the API-status note above):
     luajit examples/grab-move/main.lua 60     # frame-capped (headless smoke)
 
 `-Dimpl` composes with `-Dandroid` / `-Dwasm`; ABI-touching changes must pass
-the smokes under **both** impls (the verified hedge: `gcc -shared src/zuil.c`
-alone produces a working FFI library).
+the smokes under **both** impls.
+
+No-Zig fallback (the toolchain hedge — `build.zig` is convenience, not a
+dependency). When `zig` is missing or its pinned dev API has drifted and
+`zig build` breaks, the C core still builds the desktop `.so` with any C compiler,
+and because `src/zuil.c` is in lockstep with the header it exports the **full M1
+surface**, not just Step 0 — verified end-to-end through both smokes *and*
+`grab-move` (see the 2026-06-14 decision-log entry):
+
+    mkdir -p zig-out/lib
+    gcc -shared -Iinclude -o zig-out/lib/libzuil.so src/zuil.c $(pkg-config --cflags --libs sdl3)
+    luajit examples/smoke.lua                 # cc / clang / `zig cc -shared` are drop-in
+    luajit examples/grab-move/main.lua 60     # full M1 demo, gcc-built, zero Zig
+
+Desktop only — `-Dimpl`, Android, and wasm still go through `build.zig`. On
+Windows/MSYS2 MINGW64 this emits a PE DLL *named* `libzuil.so` (loaded fine by
+path); `SDL3.dll` must be on `PATH` at runtime (`export PATH="/c/msys64/mingw64/bin:$PATH"`).
 
 Android cross-build (needs `unzip` on PATH):
 
