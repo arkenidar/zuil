@@ -105,6 +105,23 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
         // (the Zig impl already carries them on the cdefs module).
         if (impl == .c) mod.linkSystemLibrary("sdl3", .{});
 
+        // Windows/MSYS2: lld resolves pkg-config's bare `-lSDL3` to the *static*
+        // libSDL3.a (it sits beside the import lib), but the non-static
+        // `pkg-config --libs` omits SDL3's Win32 deps — so the shared libzuil
+        // link fails with undefined winmm/ole32/setupapi/gdi32 symbols. Supply
+        // SDL3's static dep list (from `pkg-config --static --libs sdl3`) so the
+        // .so folds SDL3 in self-contained — no external SDL3.dll at runtime,
+        // unlike the gcc-shared hedge. Linux desktop (libsdl3-dev) is unaffected;
+        // these are a no-op off Windows. Harmless on the static archive and if a
+        // future setup links SDL3 dynamically (real Win32 import libs either way).
+        if (target.result.os.tag == .windows) {
+            inline for (.{
+                "winmm",  "imm32",    "ole32",    "oleaut32", "version",
+                "uuid",   "advapi32", "setupapi", "shell32",  "gdi32",
+                "user32", "kernel32", "dinput8",
+            }) |win_lib| mod.linkSystemLibrary(win_lib, .{ .use_pkg_config = .no });
+        }
+
         // Step 0: a do-nothing library that links SDL3 and exports one symbol.
         const lib = b.addLibrary(.{
             .name = "zuil",
@@ -348,7 +365,12 @@ fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) void
         "python3",        "-m", "http.server", "8080",
         "--bind", "127.0.0.1", "-d",
     });
-    serve.addArg(b.getInstallPath(.prefix, "web"));
+    // Serve straight from the emitted .html's cache dir (same files as the
+    // installed copy). `b.getInstallPath` was removed in newer Zig dev builds,
+    // and a LazyPath dir-arg is version-robust besides — addDirectoryArg also
+    // wires the build dependency, so link_html runs first. web_files still
+    // installs to zig-out/web for parity; depend on it so that copy is fresh.
+    serve.addDirectoryArg(smoke_html.dirname());
     serve.step.dependOn(&web_files.step);
     b.step("wasm-serve", "Serve the web smoke at http://127.0.0.1:8080/smoke_web.html")
         .dependOn(&serve.step);
