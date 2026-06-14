@@ -60,9 +60,9 @@ update its dated **decision log** when a design choice changes.
 
 Expected: `ZUIL ok - linked SDL3 version = 3002010  (3.2.10)`
 
-Desktop M1 demo (Zig impl only — see the API-status note above):
+Desktop M1 demo (runs on **both** impls — lockstep restored 2026-06-14):
 
-    zig build -Dimpl=zig
+    zig build                                 # C impl (default); add -Dimpl=zig for the twin
     luajit examples/grab-move/main.lua        # interactive grab-move on zuil
     luajit examples/grab-move/main.lua 60     # frame-capped (headless smoke)
 
