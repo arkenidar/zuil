@@ -424,3 +424,14 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   so `smoke.{lua,py}` + `grab-move/zuil.lua` now try a small candidate list. The pin
   (`0.17.0-dev.389`) is still the supported toolchain; these just keep the door open on a
   drifted dev Zig — the same toolchain-hedge spirit, now extended to `build.zig` itself.
+
+- **2026-06-14** — **Toolchain bump: dev Zig `.389` → `.857`, verified-good.** The Debian
+  box upgraded Zig to `0.17.0-dev.857+2b2b85c5f`. Because `build.zig.zon` records a
+  `minimum_zig_version` (a floor, not an exact pin) and `.857 ≥ .389`, the upgrade satisfied
+  it untouched — the churn-prone APIs (`addTranslateC`, `createModule` / `root_module` /
+  `addLibrary`) all still resolve, so the toolchain hedge wasn't even called on this time.
+  Verified end-to-end on `.857`: `zig build` (C, default) **and** `zig build -Dimpl=zig`
+  both build `libzuil.{so,a}`, and `smoke.lua` + `grab-move/main.lua 60` pass under both
+  impls. Promoted `.857` to the recorded floor in `build.zig.zon` and the CLAUDE.md
+  "Toolchain" note so the "verified working" version stays honest, rather than leaving the
+  pin pointing at a build no longer installed.

@@ -39,10 +39,12 @@ update its dated **decision log** when a design choice changes.
 
 ## Toolchain (fragile — pinned on purpose)
 
-- **Zig `0.17.0-dev.389+f5a1968f6`** (pinned in `build.zig.zon`). This dev build
-  uses `addTranslateC` in place of `@cImport`, plus `createModule` /
+- **Zig `0.17.0-dev.857+2b2b85c5f`** (`minimum_zig_version` in `build.zig.zon`;
+  verified-good — see the 2026-06-14 toolchain-bump decision-log entry). This dev
+  build uses `addTranslateC` in place of `@cImport`, plus `createModule` /
   `root_module` / `addLibrary` — APIs that churn between dev builds. `zig` must
-  be on PATH.
+  be on PATH. (`.zon` records a *minimum*, not an exact pin — `.857` cleared the
+  prior `.389` floor untouched.)
 - **SDL3 dev libs**: `libsdl3-dev` (pkg-config name `sdl3`); later milestones
   add `libsdl3-ttf-dev`.
 - **LuaJIT** to run the examples.
