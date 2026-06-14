@@ -22,6 +22,13 @@ local function bring_to_front(list, item)
   list[#list + 1] = item
 end
 
+-- Shared per-frame input claim. The topmost widget under the cursor (input is
+-- processed front-to-back, the reverse of the draw order) eats the press so it
+-- can't pass through to anything drawn beneath it. Reset at the top of each
+-- frame. This is the cross-group stop-propagation the original lacked; the
+-- handles loop's own early-out still resolves which handle wins within the group.
+local claimed = false
+
 -- draggable handles ----------------------------------------------------------
 local handles = {
   { x = 60,  y = 90,  w = 300, h = 60, r = 0.20, g = 0.45, b = 0.95 },
@@ -37,21 +44,25 @@ end
 -- one front-to-back interaction pass; returns nothing, mutates handles
 local function update_handles()
   local mx, my = zuil.mouse()
-  for i = #handles, 1, -1 do
-    local h = handles[i]
-    -- delete button (top-right) takes priority
-    if zuil.pressed(1) and inside(mx, my, handle_delete_rect(h)) then
-      table.remove(handles, i)
-      return
-    end
-    -- grab to drag
-    if zuil.pressed(1) and inside(mx, my, h) then
-      h.grab = { dx = mx - h.x, dy = my - h.y }
-      bring_to_front(handles, h)
-      return -- grab only the topmost hit; stop propagation
+  if not claimed and zuil.pressed(1) then
+    for i = #handles, 1, -1 do
+      local h = handles[i]
+      -- delete button (top-right) takes priority
+      if inside(mx, my, handle_delete_rect(h)) then
+        table.remove(handles, i)
+        claimed = true
+        break
+      end
+      -- grab to drag
+      if inside(mx, my, h) then
+        h.grab = { dx = mx - h.x, dy = my - h.y }
+        bring_to_front(handles, h)
+        claimed = true
+        break -- grab only the topmost hit; stop propagation
+      end
     end
   end
-  -- apply active drag / release
+  -- apply active drag / release (ungated: an established grab keeps tracking)
   for _, h in ipairs(handles) do
     if h.grab then
       if zuil.down(1) then
@@ -86,9 +97,9 @@ local active_tab = tabs[1]
 
 local function update_tabs()
   local mx, my = zuil.mouse()
-  if zuil.pressed(1) then
+  if not claimed and zuil.pressed(1) then
     for _, t in ipairs(tabs) do
-      if inside(mx, my, t) then active_tab = t end
+      if inside(mx, my, t) then active_tab = t; claimed = true end
     end
   end
 end
@@ -105,9 +116,14 @@ local panel = { x = 380, y = 110, w = 260, h = 320, ox = 0, oy = 0 }
 
 local function update_panel()
   local mx, my = zuil.mouse()
-  local header = { x = panel.x, y = panel.y, w = panel.w, h = 28 }
-  if zuil.pressed(1) and inside(mx, my, header) then
-    panel.drag = { dx = mx - panel.x, dy = my - panel.y }
+  -- the whole panel surface is opaque to clicks (blocks pass-through); only the
+  -- header initiates a drag.
+  if not claimed and zuil.pressed(1) and inside(mx, my, panel) then
+    claimed = true
+    local header = { x = panel.x, y = panel.y, w = panel.w, h = 28 }
+    if inside(mx, my, header) then
+      panel.drag = { dx = mx - panel.x, dy = my - panel.y }
+    end
   end
   if panel.drag then
     if zuil.down(1) then
@@ -148,10 +164,13 @@ end
 
 -- frame ----------------------------------------------------------------------
 zuil.run(function()
-  -- input: tabs first (always on top), then handles, then panel
-  update_tabs()
-  update_handles()
+  -- input: front-to-back (the reverse of the draw order below) so the topmost
+  -- widget under the cursor claims the press and it can't pass through. The
+  -- panel is drawn last, so it's on top, so it sees input first.
+  claimed = false
   update_panel()
+  update_handles()
+  update_tabs()
 
   -- draw: background, then back-to-front
   zuil.color(0.08, 0.08, 0.10); zuil.clear()
