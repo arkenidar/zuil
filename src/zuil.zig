@@ -1,7 +1,8 @@
-//! ZUIL — Zig implementation (Zig-first; the optional C twin in src/zuil.c is
-//! not maintained for the M1 desktop slice). Everything is exported through the
-//! `include/zuil.h` contract as `export fn … callconv(.c)`, which emits a plain
-//! C ABI — the LuaJIT / PUC-Lua / C consumers cannot tell it isn't C.
+//! ZUIL — Zig implementation. Twin of src/zuil.c behind the same contract;
+//! the two stay in lockstep (the M1 desktop slice lives in both). Everything is
+//! exported through the `include/zuil.h` contract as `export fn … callconv(.c)`,
+//! which emits a plain C ABI — the LuaJIT / PUC-Lua / C consumers cannot tell it
+//! isn't C.
 //!
 //! M1 desktop slice: a poll-style, callback-free window + draw + input
 //! mechanism. The consumer owns the loop (frame_begin/frame_end); input is read

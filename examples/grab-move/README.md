@@ -10,7 +10,7 @@ demo — the acceptance test that drove the desktop M1 slice (see the **2026-06-
 From the project root (so the relative `libzuil.so` path resolves):
 
 ```sh
-zig build -Dimpl=zig                 # build the Zig impl (the M1 slice lives in src/zuil.zig)
+zig build                            # C impl (default); add -Dimpl=zig for the Zig twin — same ABI
 luajit examples/grab-move/main.lua   # interactive
 luajit examples/grab-move/main.lua 60   # optional: auto-stop after 60 frames (headless smoke)
 ```

@@ -17,17 +17,19 @@ throughout, no `*W`/UTF-16, no fixed struct ABI).
 exists in code (grep `include/zuil.h` for the current surface):
 
 - **Step 0**: `zuil_sdl_version()`, implemented in both `src/zuil.c` and `src/zuil.zig`.
-- **A desktop M1 slice (landed 2026-06-14, Zig-only)**: window + poll-style frame pump
+- **A desktop M1 slice (landed 2026-06-14)**: window + poll-style frame pump
   (`zuil_window_open/close`, `zuil_frame_begin/end`), draw vocab (`set_color/clear/fill_rect/
   draw_rect/draw_line`), an input snapshot **as accessor functions** (`mouse_x/y`,
   `mouse_down/pressed/released`, `key_pressed`, `should_quit`), and a clip + 2-D translation
-  stack (`clip_push/pop`, `push/pop/translate`). Driven by `examples/grab-move/` (LuaJIT). See
-  `docs/architecture.md` §10 (2026-06-14) for the rationale and the deviations from `m1.md`.
+  stack (`clip_push/pop`, `push/pop/translate`). Implemented in **both** impls and driven by
+  `examples/grab-move/` (LuaJIT). See `docs/architecture.md` §10 (2026-06-14) for the rationale
+  and the deviations from `m1.md`.
 
-**⚠️ The M1 slice is Zig-only — `src/zuil.c` is behind the header.** It was implemented
-`-Dimpl=zig`-first by owner choice; the C twin was *not* updated, so `zig build -Dimpl=c`
-exports only `zuil_sdl_version`. The lockstep invariant is intentionally, temporarily broken
-for these symbols. **Still designed-not-built**: `src/c_abi.zig` core/veneer split, `event_post`/
+**Lockstep restored (2026-06-14).** The slice was first landed `-Dimpl=zig`-only; the C twin
+(`src/zuil.c`) is now a line-for-line port of the same symbols, so `zig build -Dimpl=c` and
+`-Dimpl=zig` both export the full surface and pass `examples/grab-move/_smoke.lua`. The
+header's lockstep invariant holds again. **Still designed-not-built**: `src/c_abi.zig`
+core/veneer split, `event_post`/
 message/timer, the `hot`/`active`/`focused` id-registry, text/IME, `blit_rgba`, the widget
 module — grep before assuming any exist.
 

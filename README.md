@@ -10,10 +10,10 @@ struct ABI, UTF-8 throughout).
 
 > **Status: early bootstrap.** Step 0 — the build / link / FFI pipeline — is complete and
 > verified. A **desktop M1 slice** (window + frame pump + draw vocabulary + input snapshot +
-> clip/transform) has since landed in the Zig impl, exercised by an interactive demo —
-> `examples/grab-move/` (run with `zig build -Dimpl=zig && luajit examples/grab-move/main.lua`).
-> Completing M1 properly (the spikes, the 4-face smoke matrix, dual-impl lockstep, the ABI
-> freeze) is the next milestone — see [docs/m1.md](docs/m1.md).
+> clip/transform) has since landed in **both** impls, exercised by an interactive demo —
+> `examples/grab-move/` (run with `zig build && luajit examples/grab-move/main.lua`; add
+> `-Dimpl=zig` for the Zig twin). Completing M1 properly (the spikes, the 4-face smoke matrix,
+> the ABI freeze) is the next milestone — see [docs/m1.md](docs/m1.md).
 
 ## Why
 

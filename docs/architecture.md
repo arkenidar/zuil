@@ -371,3 +371,15 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   mechanism-not-policy line. Text/IME, `blit_rgba`, and the TCL/ticoluna re-expression are
   designed but deferred (no pixels added). Build/run: `zig build -Dimpl=zig`, then
   `luajit examples/grab-move/main.lua`.
+- **2026-06-14** — **C twin brought back to lockstep; the Zig-only deviation is closed.**
+  Ported the entire M1 slice into `src/zuil.c` as a line-for-line twin of `src/zuil.zig` (same
+  module state, same SDL3 calls, same semantics). Rationale: the C twin exists *only* as the
+  toolchain-fragility hedge, and a hedge that omits the whole working surface hedges nothing —
+  if Zig stalled today, everything past `zuil_sdl_version` would be lost. Restoring it costs one
+  mechanical port and re-arms the hedge for real. Both `zig build -Dimpl=c` and `-Dimpl=zig` now
+  export the full surface, pass `examples/smoke.{lua,py}`, and run `examples/grab-move/` +
+  `_smoke.lua` identically. One portability note surfaced and was absorbed: SDL3 dropped
+  `SDL_bool` (now standard C `bool`), so the twin uses `bool`/`true`/`false`. The header's
+  lockstep invariant holds again. **Still open as designed-not-built**: `src/c_abi.zig`
+  core/veneer split (so the two faces share one core instead of two hand-kept twins), the 4-face
+  smoke matrix, Spike P (wasm), `event_post`/message/timer, and the id-registry.
