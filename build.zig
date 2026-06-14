@@ -89,7 +89,12 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
             .optimize = optimize,
             .link_libc = true,
         });
-        cdefs_tc.linkSystemLibrary("sdl3", .{});
+        // Give translate-c SDL3's *headers* only — not its link. Calling
+        // `linkSystemLibrary("sdl3")` on a translate-c step appends `-lSDL3` to
+        // the translate-c command itself, and on Windows lld then tries to merge
+        // the static libSDL3.a's many objects → "coff does not support linking
+        // multiple objects into one". The actual SDL3 link lives on `mod` below.
+        addSdlIncludes(b, cdefs_tc);
         break :blk cdefs_tc.createModule();
     } else null;
 
@@ -101,9 +106,11 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
             .optimize = optimize,
             .link_libc = true,
         });
-        // The C impl gets SDL3's include flags + link from pkg-config here
-        // (the Zig impl already carries them on the cdefs module).
-        if (impl == .c) mod.linkSystemLibrary("sdl3", .{});
+        // Link SDL3 on the final module for BOTH impls. The C impl also needs
+        // the pkg-config cflags here so its source finds SDL3's headers at
+        // compile; the Zig impl already has the headers via translate-c's
+        // include path (addSdlIncludes) and just needs the link.
+        mod.linkSystemLibrary("sdl3", .{});
 
         // Windows/MSYS2: lld resolves pkg-config's bare `-lSDL3` to the *static*
         // libSDL3.a (it sits beside the import lib), but the non-static
@@ -129,6 +136,20 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
             .linkage = linkage,
         });
         b.installArtifact(lib);
+    }
+}
+
+/// Feed a translate-c step SDL3's include dirs *without* linking SDL3. We can't
+/// use `linkSystemLibrary` for this: it appends `-lSDL3` to the translate-c
+/// command, which breaks on Windows COFF (see the call site). So ask pkg-config
+/// for the include flags alone and add each `-I` dir. `cwd_relative` because
+/// these are absolute system paths, not build-root-relative.
+fn addSdlIncludes(b: *std.Build, tc: *std.Build.Step.TranslateC) void {
+    const cflags = b.run(&.{ "pkg-config", "--cflags-only-I", "sdl3" });
+    var it = std.mem.tokenizeAny(u8, cflags, " \t\r\n");
+    while (it.next()) |tok| {
+        if (std.mem.startsWith(u8, tok, "-I"))
+            tc.addSystemIncludePath(.{ .cwd_relative = tok[2..] });
     }
 }
 
