@@ -400,6 +400,27 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   `libzuil.so` (LuaJIT `ffi.load` / ctypes `CDLL` load it by path regardless), and `SDL3.dll`
   must be on `PATH` at runtime. Scope unchanged: the hand build covers the desktop `.so`
   only; `-Dimpl`, Android, and wasm still need `build.zig`. Documented as a first-class
-  path in `README.md`, `CLAUDE.md`, and `examples/grab-move/README.md`. (`build.zig` itself
-  remains broken against this Zig — re-pin or update `getInstallPath` to fix the convenience
-  driver; the hedge is what kept that from being a blocker.)
+  path in `README.md`, `CLAUDE.md`, and `examples/grab-move/README.md`. (The hedge kept the
+  broken `build.zig` from being a blocker; `build.zig` was then repaired too — see next entry.)
+- **2026-06-14** — **`build.zig` repaired for newer dev Zig + Windows — both impls build
+  again.** Having proven the hedge, fixed the convenience driver rather than leaving it
+  broken. Three independent fixes, each verified on Windows/MSYS2 MINGW64: (a) **config
+  crash** — `b.getInstallPath` was removed from `std.Build`, so *every* `zig build` died at
+  config evaluating the `wasm-serve` step; now serves the web smoke from the emitted `.html`'s
+  dir via a `LazyPath` dir-arg (version-robust, no install-path API). (b) **Windows desktop
+  link** — lld resolves pkg-config's bare `-lSDL3` to the *static* `libSDL3.a`, whose Win32
+  deps `pkg-config --libs` (non-static) omits, so the shared `libzuil` link failed on
+  undefined `winmm`/`ole32`/`setupapi`/`gdi32`; supply SDL3's static dep list (from
+  `pkg-config --static --libs sdl3`) when targeting Windows, folding SDL3 in **self-contained**
+  (no external `SDL3.dll` at runtime — unlike the gcc-shared hedge). (c) **Zig-impl
+  translate-c** — `linkSystemLibrary("sdl3")` on the *translate-c* step appended `-lSDL3` to
+  it, and on Windows lld tried to merge the static archive's many objects ("coff does not
+  support linking multiple objects into one"); translate-c needs only headers, so feed it the
+  include dirs alone (`pkg-config --cflags-only-I`) and move the SDL3 link to the final module
+  for both impls. Net: `zig build` (C, default) **and** `zig build -Dimpl=zig` both build,
+  link, and pass `smoke.{lua,py}` + `grab-move` on Windows. (b)/(c) are no-ops off Windows;
+  Linux desktop (`libsdl3-dev`) is unaffected. The example loaders also learned the Windows
+  artifact name: Zig emits `zig-out/bin/zuil.dll` (the gcc hedge writes `zig-out/lib/libzuil.so`),
+  so `smoke.{lua,py}` + `grab-move/zuil.lua` now try a small candidate list. The pin
+  (`0.17.0-dev.389`) is still the supported toolchain; these just keep the door open on a
+  drifted dev Zig — the same toolchain-hedge spirit, now extended to `build.zig` itself.
