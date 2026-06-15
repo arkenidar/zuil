@@ -13,6 +13,7 @@
 #define SDL_MAIN_HANDLED 1 /* keep SDL's header-only main shim off our entry point */
 #include <SDL3/SDL.h>
 #include "zuil.h"
+#include "font8x8.h" /* baked PD 8x8 font: zuil_font8x8 + ZUIL_FONT_* (gen by tools/gen_font8x8.py) */
 
 /* Step 0: returns the linked SDL3 version as a packed int (3.2.10 -> 3002010). */
 int zuil_sdl_version(void)
@@ -44,6 +45,28 @@ static size_t g_xform_len = 0;
 static SDL_Rect g_clip_stack[32];
 static size_t g_clip_len = 0;
 
+/* current draw color, cached so draw_text can tint the (white) glyph atlas with
+ * the same color set_color last applied to the renderer. */
+static Uint8 g_col[4] = { 0, 0, 0, 255 };
+
+/* --- text / bitmap font (mirror of src/zuil.zig) -------------------------- */
+/* The font is the public-domain 8x8 ASCII page baked by tools/gen_font8x8.py,
+ * here #included from src/font8x8.h (the Zig twin @embedFile's the identical
+ * src/font8x8.bin). NOT SDL3_ttf: zero extra deps, web/Android-friendly. */
+#define ATLAS_COLS 16                        /* glyph grid: 16 x 6 = 96 cells */
+#define ATLAS_ROWS (ZUIL_FONT_COUNT / ATLAS_COLS)
+
+/* One font PAGE = one glyph-grid texture. Array form from day one so the later
+ * big high-detail atlas can add bold/italic pages without touching draw_text;
+ * today only page 0 (regular) exists. */
+typedef struct {
+    SDL_Texture *tex; /* white ink + alpha, BLEND mode */
+    int cols;
+} FontPage;
+
+static FontPage g_pages[1];
+static float    g_font_scale = 1.0f;
+
 static inline float dx(float x) { return x + g_tx; }
 static inline float dy(float y) { return y + g_ty; }
 
@@ -61,6 +84,10 @@ int zuil_window_open(const char *title, int w, int h)
 
 void zuil_window_close(void)
 {
+    for (size_t i = 0; i < SDL_arraysize(g_pages); i++) { /* free glyph textures; rebuild lazily */
+        if (g_pages[i].tex) SDL_DestroyTexture(g_pages[i].tex);
+        g_pages[i].tex = NULL;
+    }
     if (g_ren) SDL_DestroyRenderer(g_ren);
     if (g_win) SDL_DestroyWindow(g_win);
     g_ren = NULL;
@@ -130,8 +157,9 @@ static inline Uint8 to8(float v)
 
 void zuil_set_color(float r, float g, float b, float a)
 {
+    g_col[0] = to8(r); g_col[1] = to8(g); g_col[2] = to8(b); g_col[3] = to8(a);
     if (!g_ren) return;
-    SDL_SetRenderDrawColor(g_ren, to8(r), to8(g), to8(b), to8(a));
+    SDL_SetRenderDrawColor(g_ren, g_col[0], g_col[1], g_col[2], g_col[3]);
 }
 
 void zuil_clear(void)
@@ -157,6 +185,103 @@ void zuil_draw_line(float x1, float y1, float x2, float y2)
 {
     if (!g_ren) return;
     SDL_RenderLine(g_ren, dx(x1), dy(y1), dx(x2), dy(y2));
+}
+
+/* --- bitmap text --------------------------------------------------------- */
+
+/* Build page 0's glyph-grid texture once (lazy: needs the renderer). White ink
+ * + alpha so draw_text can tint it via color/alpha mod; BLEND so the
+ * transparent background shows through. Recreatable: window_close nulls it. */
+static void ensure_atlas(void)
+{
+    if (!g_ren || g_pages[0].tex) return;
+
+    const int W = ATLAS_COLS * ZUIL_FONT_CELL; /* 128 */
+    const int H = ATLAS_ROWS * ZUIL_FONT_CELL; /* 48  */
+    Uint32 px[ATLAS_COLS * ZUIL_FONT_CELL * ATLAS_ROWS * ZUIL_FONT_CELL];
+    SDL_memset(px, 0, sizeof(px)); /* RGBA32; white=0xFFFFFFFF, bg=0 (endian-agnostic) */
+    for (int i = 0; i < ZUIL_FONT_COUNT; i++) {
+        int gx = (i % ATLAS_COLS) * ZUIL_FONT_CELL;
+        int gy = (i / ATLAS_COLS) * ZUIL_FONT_CELL;
+        for (int row = 0; row < ZUIL_FONT_CELL; row++) {
+            unsigned char bits = zuil_font8x8[i][row];
+            for (int col = 0; col < ZUIL_FONT_CELL; col++) {
+                if ((bits >> col) & 1) /* bit col (LSB) = leftmost column */
+                    px[(gy + row) * W + gx + col] = 0xFFFFFFFFu;
+            }
+        }
+    }
+
+    SDL_Texture *tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_RGBA32,
+                                         SDL_TEXTUREACCESS_STATIC, W, H);
+    if (!tex) return;
+    SDL_UpdateTexture(tex, NULL, px, W * (int)sizeof(Uint32));
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    g_pages[0].tex = tex;
+    g_pages[0].cols = ATLAS_COLS;
+}
+
+/* Map a byte to its cell index, falling back to the box (last cell) for
+ * non-printable / non-ASCII (real UTF-8 decoding is the deferred next step). */
+static inline size_t cell_index(unsigned char ch)
+{
+    if (ch >= ZUIL_FONT_FIRST && ch <= 0x7E) return (size_t)(ch - ZUIL_FONT_FIRST);
+    return ZUIL_FONT_COUNT - 1; /* U+007F slot = fallback box */
+}
+
+void zuil_set_font_scale(float s)
+{
+    g_font_scale = s;
+}
+
+void zuil_draw_text(float x, float y, const char *utf8)
+{
+    if (!g_ren || !utf8) return;
+    ensure_atlas();
+    SDL_Texture *tex = g_pages[0].tex;
+    if (!tex) return;
+
+    /* Tint the white glyphs with the current draw color. */
+    SDL_SetTextureColorMod(tex, g_col[0], g_col[1], g_col[2]);
+    SDL_SetTextureAlphaMod(tex, g_col[3]);
+
+    const float adv = (float)ZUIL_FONT_CELL * g_font_scale;
+    const float dim = (float)ZUIL_FONT_CELL * g_font_scale;
+    float pen = x;
+    for (const unsigned char *p = (const unsigned char *)utf8; *p; p++) {
+        size_t ci = cell_index(*p);
+        SDL_FRect src = { (float)((ci % ATLAS_COLS) * ZUIL_FONT_CELL),
+                          (float)((ci / ATLAS_COLS) * ZUIL_FONT_CELL),
+                          ZUIL_FONT_CELL, ZUIL_FONT_CELL };
+        SDL_FRect dst = { dx(pen), dy(y), dim, dim };
+        SDL_RenderTexture(g_ren, tex, &src, &dst);
+        pen += adv;
+    }
+}
+
+/* --- text measurement (mechanism; user-space owns layout/caret policy) ---- */
+
+static inline size_t glyph_count(const char *utf8)
+{
+    if (!utf8) return 0;
+    size_t n = 0;
+    while (utf8[n]) n++; /* byte count for now; same when UTF-8 lands */
+    return n;
+}
+
+float zuil_font_advance(void)
+{
+    return (float)ZUIL_FONT_CELL * g_font_scale; /* the one true horizontal step */
+}
+
+float zuil_text_width(const char *utf8)
+{
+    return (float)glyph_count(utf8) * zuil_font_advance();
+}
+
+float zuil_text_height(void)
+{
+    return (float)ZUIL_FONT_CELL * g_font_scale;
 }
 
 /* --- input snapshot accessors -------------------------------------------- */

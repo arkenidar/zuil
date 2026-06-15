@@ -40,6 +40,26 @@ void zuil_fill_rect(float x, float y, float w, float h);
 void zuil_draw_rect(float x, float y, float w, float h);
 void zuil_draw_line(float x1, float y1, float x2, float y2);
 
+/* Bitmap text — the built-in 1-bit ASCII font atlas, NOT SDL3_ttf. This is the
+ * standing text mechanism (2026-06-15): a public-domain 8x8 fixed-width font is
+ * baked into the binary (src/font8x8.{h,bin}), uploaded once as one tinted
+ * texture, then cropped per-glyph and scaled. No external font lib, no font
+ * assets — keeps deps empty (build.zig.zon), helps web/Android, fits the C-first
+ * hedge. Fixed-width with uniform spacing; glyphs draw in the current
+ * zuil_set_color tint and honor the translation stack. Bytes outside printable
+ * ASCII (0x20..0x7E) draw a fallback box (real UTF-8 + Unicode pages are the
+ * deferred next step). */
+void zuil_set_font_scale(float s); /* sticky, default 1.0 (like set_color/translate) */
+void zuil_draw_text(float x, float y, const char *utf8);
+
+/* Text measurement — a first-class core responsibility, not a widget concern:
+ * layout sizes content to these, and editable text uses the advance for caret
+ * placement / hit-testing. All reflect the current font scale. Mechanism only —
+ * the core reports metrics; user-space owns layout/caret policy. */
+float zuil_text_width(const char *utf8); /* full run width at the current scale */
+float zuil_text_height(void);            /* line height at the current scale */
+float zuil_font_advance(void);           /* per-glyph horizontal step (uniform) */
+
 /* Input snapshot (accessors). Buttons: 1 = left, 2 = middle, 3 = right. */
 int zuil_mouse_x(void);
 int zuil_mouse_y(void);

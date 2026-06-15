@@ -40,6 +40,28 @@ var g_xform_len: usize = 0;
 var g_clip_stack = std.mem.zeroes([32]c.SDL_Rect);
 var g_clip_len: usize = 0;
 
+// current draw color, cached so draw_text can tint the (white) glyph atlas with
+// the same color set_color last applied to the renderer.
+var g_col = [4]u8{ 0, 0, 0, 255 };
+
+// --- text / bitmap font ---------------------------------------------------
+// The font is the public-domain 8x8 ASCII page baked at build of tools/
+// gen_font8x8.py and @embedFile'd here (the C twin #includes src/font8x8.h —
+// identical 768 bytes). NOT SDL3_ttf: zero extra deps, web/Android-friendly.
+const font_bin = @embedFile("font8x8.bin");
+const FONT_FIRST = 0x20; // first code point in the baked page
+const FONT_COUNT = 96; // U+0020..U+007F (last cell is the fallback box)
+const FONT_CELL = 8; // 8x8 glyph cell
+const ATLAS_COLS = 16; // glyph grid: 16 x 6 = 96 cells
+const ATLAS_ROWS = FONT_COUNT / ATLAS_COLS;
+
+// One font PAGE = one glyph-grid texture. Array form from day one so the later
+// big high-detail atlas can add bold/italic pages without touching draw_text;
+// today only page 0 (regular) exists.
+const FontPage = struct { tex: ?*c.SDL_Texture = null, cols: c_int = ATLAS_COLS };
+var g_pages = [1]FontPage{.{}};
+var g_font_scale: f32 = 1.0;
+
 inline fn dx(x: f32) f32 {
     return x + g_tx;
 }
@@ -59,6 +81,10 @@ export fn zuil_window_open(title: [*c]const u8, w: c_int, h: c_int) callconv(.c)
 }
 
 export fn zuil_window_close() callconv(.c) void {
+    for (&g_pages) |*pg| { // free glyph textures; nulled so they rebuild lazily
+        if (pg.tex) |t| c.SDL_DestroyTexture(t);
+        pg.tex = null;
+    }
     if (g_ren) |r| c.SDL_DestroyRenderer(r);
     if (g_win) |win| c.SDL_DestroyWindow(win);
     g_ren = null;
@@ -117,8 +143,9 @@ export fn zuil_frame_end() callconv(.c) void {
 // --- draw vocabulary ------------------------------------------------------
 
 export fn zuil_set_color(r: f32, g: f32, b: f32, a: f32) callconv(.c) void {
+    g_col = .{ to8(r), to8(g), to8(b), to8(a) }; // cache so draw_text can tint glyphs
     const ren = g_ren orelse return;
-    _ = c.SDL_SetRenderDrawColor(ren, to8(r), to8(g), to8(b), to8(a));
+    _ = c.SDL_SetRenderDrawColor(ren, g_col[0], g_col[1], g_col[2], g_col[3]);
 }
 
 inline fn to8(v: f32) u8 {
@@ -144,6 +171,98 @@ export fn zuil_draw_rect(x: f32, y: f32, w: f32, h: f32) callconv(.c) void {
 export fn zuil_draw_line(x1: f32, y1: f32, x2: f32, y2: f32) callconv(.c) void {
     const ren = g_ren orelse return;
     _ = c.SDL_RenderLine(ren, dx(x1), dy(y1), dx(x2), dy(y2));
+}
+
+// --- bitmap text ----------------------------------------------------------
+
+// Build page 0's glyph-grid texture once (lazy: needs the renderer). White ink
+// + alpha so draw_text can tint it via color/alpha mod; BLEND so the
+// transparent background shows through. Recreatable: window_close nulls it.
+fn ensureAtlas() void {
+    const ren = g_ren orelse return;
+    if (g_pages[0].tex != null) return;
+
+    const W = ATLAS_COLS * FONT_CELL; // 128
+    const H = ATLAS_ROWS * FONT_CELL; // 48
+    var px = std.mem.zeroes([W * H]u32); // RGBA32; white=0xFFFFFFFF, bg=0 (endian-agnostic)
+    var i: usize = 0;
+    while (i < FONT_COUNT) : (i += 1) {
+        const gx = (i % ATLAS_COLS) * FONT_CELL;
+        const gy = (i / ATLAS_COLS) * FONT_CELL;
+        var row: usize = 0;
+        while (row < FONT_CELL) : (row += 1) {
+            const bits = font_bin[i * FONT_CELL + row];
+            var col: u3 = 0;
+            while (true) : (col += 1) {
+                if ((bits >> col) & 1 != 0) // bit col (LSB) = leftmost column
+                    px[(gy + row) * W + gx + col] = 0xFFFFFFFF;
+                if (col == FONT_CELL - 1) break;
+            }
+        }
+    }
+
+    const tex = c.SDL_CreateTexture(ren, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, W, H) orelse return;
+    _ = c.SDL_UpdateTexture(tex, null, &px, W * @sizeOf(u32));
+    _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
+    g_pages[0].tex = tex;
+}
+
+// Map a byte to its cell index, falling back to the box (last cell) for
+// non-printable / non-ASCII (real UTF-8 decoding is the deferred next step).
+inline fn cellIndex(ch: u8) usize {
+    if (ch >= FONT_FIRST and ch <= 0x7E) return ch - FONT_FIRST;
+    return FONT_COUNT - 1; // U+007F slot = fallback box
+}
+
+export fn zuil_set_font_scale(s: f32) callconv(.c) void {
+    g_font_scale = s;
+}
+
+export fn zuil_draw_text(x: f32, y: f32, utf8: [*c]const u8) callconv(.c) void {
+    const ren = g_ren orelse return;
+    if (utf8 == null) return;
+    ensureAtlas();
+    const page = g_pages[0];
+    const tex = page.tex orelse return;
+
+    // Tint the white glyphs with the current draw color.
+    _ = c.SDL_SetTextureColorMod(tex, g_col[0], g_col[1], g_col[2]);
+    _ = c.SDL_SetTextureAlphaMod(tex, g_col[3]);
+
+    const adv = @as(f32, FONT_CELL) * g_font_scale;
+    const dim = @as(f32, FONT_CELL) * g_font_scale;
+    var pen = x;
+    var p: usize = 0;
+    while (utf8[p] != 0) : (p += 1) {
+        const ci = cellIndex(utf8[p]);
+        const cgx: f32 = @floatFromInt((ci % ATLAS_COLS) * FONT_CELL);
+        const cgy: f32 = @floatFromInt((ci / ATLAS_COLS) * FONT_CELL);
+        var src = c.SDL_FRect{ .x = cgx, .y = cgy, .w = FONT_CELL, .h = FONT_CELL };
+        var dst = c.SDL_FRect{ .x = dx(pen), .y = dy(y), .w = dim, .h = dim };
+        _ = c.SDL_RenderTexture(ren, tex, &src, &dst);
+        pen += adv;
+    }
+}
+
+// --- text measurement (mechanism; user-space owns layout/caret policy) ----
+
+inline fn glyphCount(utf8: [*c]const u8) usize {
+    if (utf8 == null) return 0;
+    var n: usize = 0;
+    while (utf8[n] != 0) : (n += 1) {} // byte count for now; same when UTF-8 lands
+    return n;
+}
+
+export fn zuil_font_advance() callconv(.c) f32 {
+    return @as(f32, FONT_CELL) * g_font_scale; // the one true horizontal step
+}
+
+export fn zuil_text_width(utf8: [*c]const u8) callconv(.c) f32 {
+    return @as(f32, @floatFromInt(glyphCount(utf8))) * zuil_font_advance();
+}
+
+export fn zuil_text_height() callconv(.c) f32 {
+    return @as(f32, FONT_CELL) * g_font_scale;
 }
 
 // --- input snapshot accessors --------------------------------------------
