@@ -100,9 +100,10 @@ where the core/policy line falls:
   screen requests must originate from a user gesture.
 - **File resources** — there is no real filesystem. Options: `--preload-file` (bundle into
   MEMFS at build time), `fetch` (async — friction against a sync-looking API), IDBFS/OPFS
-  (persistence). The core barely touches files — the one real consumer is **fonts for SDL3_ttf
-  (M2)**, and the blessed pattern there is *preload/embed* (the `sdl3_ttf` port exists).
-  Resource loading otherwise stays consumer policy; SDL3's `SDL_IOStream` works under
+  (persistence). The core barely touches files: text is a **built-in baked bitmap font, not
+  SDL3_ttf** (2026-06-15), so the web target needs **no `sdl3_ttf` port and no font preload** —
+  one less moving part on wasm. (Should a real-font path return, *preload/embed* stays the blessed
+  pattern.) Resource loading otherwise stays consumer policy; SDL3's `SDL_IOStream` works under
   Emscripten for the cases that look like file I/O.
 - **Threads** — wasm threads need SharedArrayBuffer, which needs COOP/COEP response headers —
   which **GitHub Pages cannot set**. ZUIL is single-threaded by design, so this costs nothing:

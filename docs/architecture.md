@@ -76,9 +76,11 @@ unchanged:
 - **Input, two ways**: the raw **event queue** (`poll_event`) *and* a derived per-frame
   **snapshot** — mouse pos/buttons/modifiers plus *edges* (pressed-this-frame,
   released-this-frame, text-entered-this-frame).
-- **Text services**: `text_size(font,text)` measurement, and **text-input / IME** enable + the
-  entered-text events. (These cannot be done in user-space — they need the font engine and the
-  platform IME.)
+- **Text services**: glyph draw + measurement (`zuil_draw_text`, `zuil_text_width/height`,
+  `zuil_font_advance`) — **landed 2026-06-15 as a built-in 1-bit bitmap font, not SDL3_ttf** (both
+  impls; see the decision log). Still to come: **text-input / IME** enable + the entered-text
+  events (need the platform IME), and the big high-detail / Unicode atlas with bold/italic style
+  pages. (Measurement cannot be done in user-space — it needs the font engine.)
 - **An id-keyed interaction registry**: `hot` / `active` / `focused` tracked by id, plus a
   hit-test helper. *This is the shared heart that makes both disciplines work.*
 - **A redraw-policy switch**: continuous (every frame) *or* on-invalidate.
@@ -222,7 +224,11 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   default), input snapshot + event queue, draw vocabulary, clip, id/hit-test/focus registry. A
   first immediate-mode demo. **Execution plan: [m1.md](m1.md)** — spike-first sub-steps,
   smoke gates, and the milestone fence.
-- **M2 — text + pixels.** SDL3_ttf text measurement/draw + IME; `blit_rgba` software framebuffer.
+- **M2 — text + pixels.** **Text landed early as a built-in 1-bit bitmap font, not SDL3_ttf**
+  (`zuil_draw_text` + measurement; see the 2026-06-15 decision-log entry). Remaining M2: IME /
+  soft-keyboard, `blit_rgba` software framebuffer, and the big high-detail / Unicode atlas
+  (RLE-packed, with bold/italic style pages). SDL3_ttf, if ever wanted, is now an optional add-on,
+  not the text plan.
 - **Widget module.** An optional user-space immediate-mode widget set; a retained convention
   documented alongside for forms/text.
 
@@ -435,3 +441,33 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   impls. Promoted `.857` to the recorded floor in `build.zig.zon` and the CLAUDE.md
   "Toolchain" note so the "verified working" version stays honest, rather than leaving the
   pin pointing at a build no longer installed.
+
+- **2026-06-15** — **Text: a built-in 1-bit bitmap font is the default mechanism, not SDL3_ttf.**
+  Pulled text forward from M2 with the *simplest thing that works*: a public-domain 8×8
+  fixed-width font (Marcel Sondaar / IBM via Daniel Hepper's font8x8, Public Domain) baked into
+  the binary, uploaded once as one white+alpha texture, then cropped per-glyph and scaled. New
+  ABI (lockstep both impls): `zuil_set_font_scale` (sticky, chosen so a future cached
+  down-scaled atlas is natural), `zuil_draw_text`, and **first-class measurement**
+  `zuil_text_width` / `zuil_text_height` / `zuil_font_advance` — `draw_text` advances by exactly
+  `font_advance`, so user-space caret/hit-test math can't disagree with what's drawn. Glyphs tint
+  with the current `set_color` and honor the translation stack; bytes outside printable ASCII draw
+  a fallback box. **Why not SDL3_ttf:** it's a real extra dependency (system lib + an Emscripten
+  `sdl3_ttf` port + font assets + shaping) at odds with the empty-deps / C-first hedge; the bitmap
+  font keeps `build.zig.zon` deps empty and helps web/Android. SDL3_ttf is demoted to an optional
+  later add-on. **Font data is committed source** (`src/font8x8.h` for the C impl's `#include`;
+  the identical `src/font8x8.bin` for the Zig impl's `@embedFile`), both emitted by the **dev-only,
+  unshipped** `tools/gen_font8x8.py` — which, *because it never ships*, is free to use SDL3_ttf /
+  FreeType to rasterize real TTFs into atlases later without putting a font lib near the runtime.
+  No build step, so the gcc no-Zig hedge still builds the full surface. **Rich text = user-space
+  styled runs** (per-run `set_color`/`font_scale`, `draw_line` underline, `text_width` advance) —
+  the core ships no markup/RTF parser, same mechanism-not-policy stance as widgets. **Forward
+  path, spec'd now, built later:** the atlas loader is page-structured (`g_pages[style]`) from day
+  one so the big high-detail / Unicode atlas can add **RLE-packed bold/italic style pages** plus a
+  `zuil_set_font_style` selector with no ABI break and no `draw_text` rewrite (RLE is deferred
+  because the 8×8 ASCII page is only 768 bytes — it pays only for the big atlas). Verified: both
+  impls build and run `grab-move` (now with centered labels, tab labels, and a styled-runs line);
+  a white-box `SDL_RenderReadPixels` check confirms glyphs actually rasterize and that
+  `text_width` matches the rendered advance; the gcc hedge builds and runs the text demo with zero
+  Zig. **NOTE:** this change inverted the usual "C leads" order at the author's request — written
+  in Zig first, then mirrored to C — but the header stayed the source of truth and both landed in
+  the same change, so lockstep holds.
