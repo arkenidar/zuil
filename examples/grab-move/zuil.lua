@@ -17,6 +17,12 @@ ffi.cdef([[
   void zuil_draw_rect(float x, float y, float w, float h);
   void zuil_draw_line(float x1, float y1, float x2, float y2);
 
+  void  zuil_set_font_scale(float s);
+  void  zuil_draw_text(float x, float y, const char *utf8);
+  float zuil_text_width(const char *utf8);
+  float zuil_text_height(void);
+  float zuil_font_advance(void);
+
   int  zuil_mouse_x(void);
   int  zuil_mouse_y(void);
   int  zuil_mouse_down(int button);
@@ -79,6 +85,13 @@ function zuil.clear() C.zuil_clear() end
 function zuil.fill(x, y, w, h) C.zuil_fill_rect(x, y, w, h) end
 function zuil.rect(x, y, w, h) C.zuil_draw_rect(x, y, w, h) end
 function zuil.line(x1, y1, x2, y2) C.zuil_draw_line(x1, y1, x2, y2) end
+
+-- text (built-in bitmap font; mechanism only — rich text is user-space runs)
+function zuil.font_scale(s) C.zuil_set_font_scale(s) end
+function zuil.text(s, x, y) C.zuil_draw_text(x, y, s) end
+function zuil.text_width(s) return C.zuil_text_width(s) end
+function zuil.text_height() return C.zuil_text_height() end
+function zuil.font_advance() return C.zuil_font_advance() end
 
 -- input ----------------------------------------------------------------------
 function zuil.mouse_x() return C.zuil_mouse_x() end

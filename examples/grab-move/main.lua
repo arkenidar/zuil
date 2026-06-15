@@ -31,9 +31,9 @@ local claimed = false
 
 -- draggable handles ----------------------------------------------------------
 local handles = {
-  { x = 60,  y = 90,  w = 300, h = 60, r = 0.20, g = 0.45, b = 0.95 },
-  { x = 120, y = 170, w = 300, h = 60, r = 0.20, g = 0.70, b = 0.55 },
-  { x = 180, y = 250, w = 300, h = 60, r = 0.80, g = 0.40, b = 0.30 },
+  { x = 60,  y = 90,  w = 300, h = 60, r = 0.20, g = 0.45, b = 0.95, name = "DRAG ME" },
+  { x = 120, y = 170, w = 300, h = 60, r = 0.20, g = 0.70, b = 0.55, name = "GRAB-MOVE" },
+  { x = 180, y = 250, w = 300, h = 60, r = 0.80, g = 0.40, b = 0.30, name = "ZUIL TEXT" },
 }
 local DEL = 24 -- delete-button side
 
@@ -81,6 +81,13 @@ local function draw_handles()
     local b = 4
     if h.grab then zuil.color(1, 0.3, 0.3) else zuil.color(h.r, h.g, h.b) end
     zuil.fill(h.x + b, h.y + b, h.w - 2 * b, h.h - 2 * b)
+    -- centered caption: text_width measurement drives the centering, so it
+    -- proves the measured width agrees with the rendered advance.
+    zuil.font_scale(2)
+    zuil.color(1, 1, 1)
+    local tw, th = zuil.text_width(h.name), zuil.text_height()
+    zuil.text(h.name, h.x + (h.w - tw) / 2, h.y + (h.h - th) / 2)
+    zuil.font_scale(1)
     -- delete button with an X
     local d = handle_delete_rect(h)
     zuil.color(0.85, 0.85, 0.85); zuil.fill(d.x, d.y, d.w, d.h)
@@ -108,7 +115,29 @@ local function draw_tabs()
     if t == active_tab then zuil.color(0.9, 0.2, 0.2) else zuil.color(0.45, 0.45, 0.45) end
     zuil.fill(t.x, t.y, t.w, t.h)
     zuil.color(1, 1, 1); zuil.rect(t.x, t.y, t.w, t.h)
+    -- centered tab label
+    zuil.font_scale(2)
+    local label = "TAB " .. t.label
+    zuil.text(label, t.x + (t.w - zuil.text_width(label)) / 2,
+                     t.y + (t.h - zuil.text_height()) / 2)
+    zuil.font_scale(1)
   end
+end
+
+-- Rich text is a user-space styled-runs pattern over the primitives: walk the
+-- runs, set color/scale per run, advance the pen by text_width, underline with
+-- a line. The core ships no markup parser — mechanism, not policy.
+local function styled_line(x, y, runs)
+  local pen = x
+  for _, run in ipairs(runs) do
+    zuil.font_scale(run.scale or 1)
+    zuil.color(run.r, run.g, run.b)
+    zuil.text(run.text, pen, y)
+    local w, h = zuil.text_width(run.text), zuil.text_height()
+    if run.underline then zuil.line(pen, y + h, pen + w, y + h) end
+    pen = pen + w
+  end
+  zuil.font_scale(1)
 end
 
 -- a clipped, draggable panel (shows clip + translate) ------------------------
@@ -177,4 +206,11 @@ zuil.run(function()
   draw_tabs()
   draw_handles()
   draw_panel()
+
+  -- styled-runs demo: rich text falls out of the primitives (no core markup)
+  styled_line(60, 460, {
+    { text = "rich ",     r = 0.6, g = 0.8, b = 1.0, scale = 2, underline = true },
+    { text = "text ",     r = 1.0, g = 0.8, b = 0.3, scale = 2 },
+    { text = "= runs",    r = 0.7, g = 0.7, b = 0.7, scale = 1 },
+  })
 end, tonumber(arg and arg[1])) -- optional frame cap for headless smoke
