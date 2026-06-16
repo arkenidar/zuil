@@ -1,0 +1,22 @@
+#!/bin/sh
+# pre-commit — the local HARD gate for ZUIL.
+#
+# Installed via scripts/install-hooks.sh, which points core.hooksPath at
+# scripts/hooks/ so this hook is version-controlled (unlike untracked
+# .git/hooks/). It runs the canonical gate in --quick mode (full lockstep + all
+# three smokes; skips only the gcc-hedge re-verify for commit-time speed) and
+# ABORTS the commit on any failure.
+#
+# Escape hatch: `git commit --no-verify` bypasses it (use sparingly — CI still
+# runs the full gate and will catch what you skipped).
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+echo "pre-commit: running ZUIL gate (scripts/verify.sh --quick)…"
+if ! scripts/verify.sh --quick; then
+  echo
+  echo "pre-commit: BLOCKED — the gate failed. Fix it, or bypass with 'git commit --no-verify'." >&2
+  exit 1
+fi
