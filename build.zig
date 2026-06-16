@@ -153,10 +153,10 @@ fn addSdlIncludes(b: *std.Build, tc: *std.Build.Step.TranslateC) void {
     }
 }
 
-// The arm64-v8a slice of the prebuilt SDL3 Android AAR. Internal layout is
-// fixed by SDL's prefab packaging (see docs/mobile.md, spikes A/B).
+// The prebuilt SDL3 Android AAR's internal layout, fixed by SDL's prefab
+// packaging (see docs/mobile.md, spikes A/B). Headers are ABI-independent; the
+// per-ABI libSDL3.so dir is derived in buildAndroid from -Dabi.
 const aar_headers_subpath = "prefab/modules/SDL3-Headers/include";
-const aar_arm64_libdir = "prefab/modules/SDL3-shared/libs/android.arm64-v8a";
 
 /// Android build: cross-compile + link the same Step-0 library for
 /// aarch64-linux-android against the prebuilt SDL3 AAR. Validated as the
@@ -180,10 +180,23 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
     // minSdk: 21 matches the AAR's prebuilt libSDL3.so (its abi.json says api 21).
     const api = b.option(u32, "android-api", "Android minSdk / crt API level") orelse 21;
 
-    // The triple stays plain (aarch64-linux-android, as proven in spike A); the
+    // ABI: arm64-v8a for real devices (default, proven in spike A); x86_64 for the
+    // KVM emulator (spike C ran an x86_64 app). The AAR ships prebuilt libSDL3.so
+    // for both; the NDK sysroot has both triple dirs. Everything ABI-specific
+    // below derives from this one option.
+    const abi_name = b.option([]const u8, "abi", "Android ABI: arm64-v8a (default) or x86_64") orelse "arm64-v8a";
+    const is_x86 = std.mem.eql(u8, abi_name, "x86_64");
+    const cpu_arch: std.Target.Cpu.Arch = if (is_x86) .x86_64 else .aarch64;
+    const triple_dir = if (is_x86) "x86_64-linux-android" else "aarch64-linux-android";
+    const aar_libdir_sub = if (is_x86)
+        "prefab/modules/SDL3-shared/libs/android.x86_64"
+    else
+        "prefab/modules/SDL3-shared/libs/android.arm64-v8a";
+
+    // The triple stays plain (<arch>-linux-android, as proven in spike A); the
     // API level is pinned through the libc file's crt_dir rather than the triple.
     const target = b.resolveTargetQuery(.{
-        .cpu_arch = .aarch64,
+        .cpu_arch = cpu_arch,
         .os_tag = .linux,
         .abi = .android,
     });
@@ -191,8 +204,8 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
     // NDK sysroot layout (Linux x86_64 host toolchain).
     const sysroot = b.pathJoin(&.{ ndk, "toolchains/llvm/prebuilt/linux-x86_64/sysroot" });
     const inc = b.pathJoin(&.{ sysroot, "usr/include" });
-    const arch_inc = b.pathJoin(&.{ sysroot, "usr/include/aarch64-linux-android" });
-    const crt_dir = b.pathJoin(&.{ sysroot, b.fmt("usr/lib/aarch64-linux-android/{d}", .{api}) });
+    const arch_inc = b.pathJoin(&.{ sysroot, b.fmt("usr/include/{s}", .{triple_dir}) });
+    const crt_dir = b.pathJoin(&.{ sysroot, b.fmt("usr/lib/{s}/{d}", .{ triple_dir, api }) });
 
     // Zig does not bundle bionic, so cross-linking needs a --libc paths file.
     // (include_dir is for any residual C compilation; crt_dir supplies the
@@ -207,15 +220,15 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
         \\
     , .{ inc, inc, crt_dir }));
 
-    // Slice the AAR for the arm64 headers + libSDL3.so. unzip preserves the
+    // Slice the AAR for the headers + this ABI's libSDL3.so. unzip preserves the
     // archive's internal directory structure under the output dir.
     const slice = b.addSystemCommand(&.{ "unzip", "-o", aar });
     slice.addArg(b.fmt("{s}/*", .{aar_headers_subpath}));
-    slice.addArg(b.fmt("{s}/libSDL3.so", .{aar_arm64_libdir}));
+    slice.addArg(b.fmt("{s}/libSDL3.so", .{aar_libdir_sub}));
     slice.addArg("-d");
     const aar_root = slice.addOutputDirectoryArg("sdl3-aar");
     const sdl_headers = aar_root.path(b, aar_headers_subpath);
-    const sdl_libdir = aar_root.path(b, aar_arm64_libdir);
+    const sdl_libdir = aar_root.path(b, aar_libdir_sub);
 
     // Zig impl only — translate-c under the Android target: the build-system
     // TranslateC step does not forward a --libc file, so point clang at the
@@ -242,6 +255,8 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
 
     // Emit both arm64 linkages: dynamic libzuil.so (FFI, into jniLibs/) and static
     // libzuil.a (C++ / native / PUC-Lua module / iOS-shaped consumers, into lib/).
+    var shared_lib: *std.Build.Step.Compile = undefined;
+    var shared_install: *std.Build.Step = undefined;
     inline for (.{ std.builtin.LinkMode.dynamic, .static }) |linkage| {
         const mod = coreModule(b, impl, cdefs, .{
             .target = target,
@@ -269,12 +284,47 @@ fn buildAndroid(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
         lib.setLibCFile(libc_txt);
 
         // .so → jniLibs (loaded at runtime by SDLActivity);  .a → lib (link-time).
-        const dest = if (linkage == .dynamic) "jniLibs/arm64-v8a" else "lib/arm64-v8a";
+        const dest = if (linkage == .dynamic)
+            b.fmt("jniLibs/{s}", .{abi_name})
+        else
+            b.fmt("lib/{s}", .{abi_name});
         const install = b.addInstallArtifact(lib, .{
             .dest_dir = .{ .override = .{ .custom = dest } },
         });
         b.getInstallStep().dependOn(&install.step);
+        if (linkage == .dynamic) {
+            shared_lib = lib;
+            shared_install = &install.step;
+        }
     }
+
+    // The grab-move *app* as Android's main shared object (libmain.so). SDLActivity
+    // dlopens libSDL3.so then this; grab-move.c's __ANDROID__ branch includes
+    // SDL_main.h, so its main() is exported as SDL_main — the entry SDLActivity
+    // calls. ZUIL is the dynamic libzuil.so (a clean NEEDED, already installed in
+    // jniLibs beside this; Android's linker resolves it from nativeLibraryDir);
+    // SDL3 stays the AAR's prebuilt .so (NEEDED via libzuil.so). Packaged into an
+    // APK by examples/grab-move/android/build-apk.sh (the spike-C recipe —
+    // aapt2/d8/zipalign/apksigner, no Gradle).
+    const app_mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+    app_mod.addCSourceFile(.{ .file = b.path("examples/grab-move/grab-move.c") });
+    app_mod.addIncludePath(b.path("include"));
+    app_mod.addSystemIncludePath(.{ .cwd_relative = inc });
+    app_mod.addSystemIncludePath(.{ .cwd_relative = arch_inc });
+    app_mod.addIncludePath(sdl_headers);
+    app_mod.linkLibrary(shared_lib);
+    const app = b.addLibrary(.{ .name = "main", .root_module = app_mod, .linkage = .dynamic });
+    app.setLibCFile(libc_txt);
+    const app_install = b.addInstallArtifact(app, .{
+        .dest_dir = .{ .override = .{ .custom = b.fmt("jniLibs/{s}", .{abi_name}) } },
+    });
+    // Opt-in: `zig build -Dandroid grab-move-apk-libs` installs the app + libzuil.so
+    // pair (into jniLibs/<abi>/) that the packaging script needs — self-contained,
+    // so it also pulls the dynamic libzuil.so install, not just libmain.so.
+    const apk_libs = b.step("grab-move-apk-libs", "Build libmain.so + libzuil.so (grab-move) for Android packaging");
+    apk_libs.dependOn(&app_install.step);
+    apk_libs.dependOn(shared_install);
+    b.getInstallStep().dependOn(&app_install.step);
 }
 
 /// Web build: cross-compile the same Step-0 library for wasm32-emscripten.
@@ -332,6 +382,12 @@ fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) void
         .target = target,
         .optimize = optimize,
         .link_libc = false,
+        // Drop the C UBSan instrumentation on wasm: in Debug, clang emits calls to
+        // __ubsan_handle_* whose runtime lives in Zig's compiler_rt — which the
+        // desktop .so links, but the emcc wasm link does not, leaving them
+        // undefined at wasm-ld time. The web build doesn't ship that runtime, so
+        // turn the checks off here (localized to wasm; desktop/Android keep them).
+        .sanitize_c = .off,
     });
     // The C impl compiles against the same emscripten sysroot headers
     // (libc's + the SDL3 port's) that translate-c read for the Zig impl.
@@ -395,6 +451,41 @@ fn buildWasm(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) void
     serve.step.dependOn(&web_files.step);
     b.step("wasm-serve", "Serve the web smoke at http://127.0.0.1:8080/smoke_web.html")
         .dependOn(&serve.step);
+
+    // ---- the grab-move *app* on the web (not just Step 0) -----------------
+    // Same division of labour as the smoke, but the full demo: emcc links
+    // examples/grab-move/grab-move.c against the same libzuil.a + SDL3 port.
+    // grab-move.c includes zuil.h (the smoke extern-declares), so pass -Iinclude;
+    // under __EMSCRIPTEN__ its entry uses emscripten_set_main_loop (the browser
+    // loop inversion, docs/web.md §3) — no source change, one #ifdef. A window is
+    // opened, so it can't run headless under node like wasm-smoke: the verifiable
+    // gate here is the link (`grab-move-web`); interaction is browser-only (`-serve`).
+    const link_gm = b.addSystemCommand(&.{emcc});
+    link_gm.addFileArg(b.path("examples/grab-move/grab-move.c"));
+    link_gm.addArtifactArg(lib);
+    link_gm.addArg("-I");
+    link_gm.addDirectoryArg(b.path("include"));
+    link_gm.addArgs(&.{ "--use-port=sdl3", "-g", "-o" });
+    const gm_html = link_gm.addOutputFileArg("grab-move.html");
+
+    const gm_files = b.addInstallDirectory(.{
+        .source_dir = gm_html.dirname(),
+        .install_dir = .prefix,
+        .install_subdir = "web-grab-move",
+    });
+    // `zig build -Dwasm grab-move-web` — link + install only (no serve); the
+    // build-here gate that proves the app compiles+links for wasm.
+    b.step("grab-move-web", "Link the grab-move web app with emcc (no serve)")
+        .dependOn(&gm_files.step);
+
+    const gm_serve = b.addSystemCommand(&.{
+        "python3",        "-m", "http.server", "8080",
+        "--bind", "127.0.0.1", "-d",
+    });
+    gm_serve.addDirectoryArg(gm_html.dirname());
+    gm_serve.step.dependOn(&gm_files.step);
+    b.step("grab-move-serve", "Serve the grab-move web app at http://127.0.0.1:8080/grab-move.html")
+        .dependOn(&gm_serve.step);
 }
 
 /// emsdk bundles its own node under <emsdk>/node/<version>_64bit/bin/node;
