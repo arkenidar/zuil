@@ -72,6 +72,27 @@ update its dated **decision log** when a design choice changes.
 
 Expected: `ZUIL ok - linked SDL3 version = 3002010  (3.2.10)`
 
+**The one gate (2026-06-16).** Don't re-run the steps by hand — `scripts/verify.sh`
+is the single canonical check, and every other surface is a thin caller of it:
+
+    ./scripts/verify.sh          # build both impls -> lockstep diff -> all 3 smokes -> gcc hedge
+    zig build verify             # same gate via Zig's build infra
+    make verify                  # same gate via Make
+    ./scripts/verify.sh --quick  # skip the gcc-hedge re-verify (the hot loop / pre-commit)
+    ./scripts/lockstep_check.sh  # just the C<->Zig<->header export diff (exit!=0 on divergence)
+
+`scripts/lockstep_check.sh` mechanizes the lockstep invariant (it `nm`-diffs the
+`zuil_*` exports of both impls against `include/zuil.h` and fails on any mismatch),
+so the "never let one impl grow a symbol the other lacks" rule is now a hard gate,
+not just prose. **Install the local hard gate once per clone:**
+
+    ./scripts/install-hooks.sh   # core.hooksPath -> scripts/hooks (pre-commit runs verify --quick)
+
+Bypass a single commit with `git commit --no-verify`; CI (`.github/workflows/ci.yml`)
+runs the full gate on a `c`/`zig` matrix regardless. In a Claude Code session the
+`.claude/` config auto-runs the lockstep check when an ABI file is edited and adds
+`/verify`, `/lockstep`, `/ship-web`, `/ship-android` slash commands.
+
 Desktop M1 demo (runs on **both** impls — lockstep restored 2026-06-14):
 
     zig build                                 # C impl (default); add -Dimpl=zig for the twin

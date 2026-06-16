@@ -501,3 +501,24 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   `grab-move.c` into an Xcode target with `SDL3.xcframework`, the C-first hedge meaning no
   cross-build step is even required; the `__APPLE__` entry uses the same `SDL_main.h` shape proven
   on Android.
+- **2026-06-16** — **Verification mechanized; the lockstep invariant turned into a hard gate.**
+  The dual-impl + smoke discipline lived only as prose in CLAUDE.md, so nothing *enforced* it —
+  a divergence between `src/zuil.c`, `src/zuil.zig`, and `include/zuil.h` could land unnoticed.
+  Added **one canonical gate**, `scripts/verify.sh` (build both impls → lockstep diff → LuaJIT
+  FFI + Python ctypes + headless grab-move smokes → gcc no-Zig hedge rebuild), with every other
+  surface a thin caller of it — `zig build verify`, `make verify`, a `/verify` slash command, the
+  git pre-commit hook (`scripts/hooks/pre-commit` via `core.hooksPath`, installed by
+  `scripts/install-hooks.sh`), and `.github/workflows/ci.yml` (a `c`/`zig` matrix + wasm/android
+  build gates). The keystone is **`scripts/lockstep_check.sh`**: it `nm`-diffs the `zuil_*` export
+  sets of the `-Dimpl=c` and `-Dimpl=zig` `libzuil.so` against the header's declarations and
+  **exits non-zero on any mismatch** — the prose "never let one impl grow a symbol the other lacks"
+  is now a mechanical block (verified by a negative test: dropping one export from the C impl fails
+  the gate and names the symbol). **Claude Code integration** (`.claude/`): a PostToolUse hook runs
+  the lockstep check the instant an ABI file is edited, slash commands wrap the blessed paths, and
+  a permission allowlist for the build/smoke commands cuts prompting. **Rationale / stance:** the
+  real logic stays in portable POSIX shell, *not* `build.zig`, so the gate survives a pinned-Zig
+  API drift — consistent with the toolchain-hedge (the `hedge` target proves the `.so` still builds
+  with plain gcc and zero Zig). **Build-system question settled:** Make is a thin
+  discoverability/hedge wrapper (no second build system); Zig's `build verify` is the idiomatic
+  entry; **Gradle stays rejected** (it would undo the no-Gradle APK recipe); cmake deferred until a
+  downstream C/C++ consumer needs `find_package`.
