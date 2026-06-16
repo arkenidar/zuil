@@ -1,0 +1,74 @@
+# ZUIL CI — the remote hard gate, mirroring the local pre-commit.
+#
+# Every job is a thin caller of the same scripts the developer runs (no
+# duplicated command lists): the desktop matrix runs scripts/verify.sh per impl
+# (so the C↔Zig↔header lockstep + all smokes are enforced on both legs), and the
+# wasm/android jobs are build-only gates that catch cross-target breakage.
+#
+# Note on the Zig pin: build.zig.zon records minimum_zig_version
+# 0.17.0-dev.857+2b2b85c5f — a dev build. mlugg/setup-zig can fetch exact dev
+# versions from its mirrors; if that version has been pruned upstream, bump the
+# `version` here together with build.zig.zon.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  desktop:
+    name: desktop (impl=${{ matrix.impl }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        impl: [c, zig]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime deps (SDL3 dev, LuaJIT, Python)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl3-dev luajit python3 binutils pkg-config
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0-dev.857+2b2b85c5f
+      - name: Verify (lockstep + smokes), smokes under impl=${{ matrix.impl }}
+        # SDL_VIDEODRIVER=offscreen lets the windowed grab-move smoke run headless.
+        run: SDL_VIDEODRIVER=offscreen ./scripts/verify.sh --impl=${{ matrix.impl }}
+
+  wasm:
+    name: wasm build gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.0
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0-dev.857+2b2b85c5f
+      - name: Materialize the SDL3 emscripten port (cached once)
+        run: |
+          echo 'int main(void){return 0;}' > /tmp/p.c
+          emcc /tmp/p.c --use-port=sdl3 -o /tmp/p.js
+      - name: Link + run the wasm smoke under node
+        run: EMSDK="$EMSDK" zig build -Dwasm wasm-smoke
+
+  android:
+    name: android cross-build gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0-dev.857+2b2b85c5f
+      - name: Provision NDK + SDL3 AAR
+        # The cross-build needs an NDK and the prebuilt SDL3 Android AAR. Wire
+        # these from the runner's $ANDROID_NDK_HOME and a cached/downloaded AAR;
+        # left as the one environment-specific seam (see docs/mobile.md).
+        run: echo "Set ANDROID_NDK_HOME and ZUIL_SDL3_AAR before the build step."
+      - name: Cross-build the x86_64 .so + APK libs (build-only gate)
+        if: ${{ env.ZUIL_SDL3_AAR != '' }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y unzip
+          zig build -Dandroid -Dabi=x86_64 grab-move-apk-libs
