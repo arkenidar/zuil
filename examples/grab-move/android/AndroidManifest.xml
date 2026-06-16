@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal SDL3 app manifest for grab-move (the spike-C recipe, docs/mobile.md).
+     SDLActivity is code-only (lives in the AAR's classes.jar -> classes.dex), so
+     there are no app resources to compile: aapt2 links this manifest alone.
+     The framework Fullscreen/NoTitleBar theme avoids needing an app resource table.
+     SDLActivity loads "SDL3" then "main" (our libmain.so), then calls SDL_main. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="org.zuil.grabmove"
+          android:versionCode="1"
+          android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="35" />
+  <application android:label="grab-move"
+               android:hasCode="true"
+               android:allowBackup="false">
+    <activity android:name="org.libsdl.app.SDLActivity"
+              android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+              android:configChanges="keyboardHidden|orientation|screenSize"
+              android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
