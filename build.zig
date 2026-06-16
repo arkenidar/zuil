@@ -137,6 +137,17 @@ fn buildDesktop(b: *std.Build, optimize: std.builtin.OptimizeMode, impl: Impl) v
         });
         b.installArtifact(lib);
     }
+
+    // `zig build verify`: the idiomatic one-command gate. It delegates to the
+    // portable scripts/verify.sh (build both impls, lockstep diff, run every
+    // smoke, prove the gcc hedge) rather than re-encoding that logic here — so
+    // the gate survives even when this pinned Zig dev build's API drifts, in
+    // keeping with the toolchain-hedge stance (build.zig is convenience, not a
+    // dependency). The script spawns its own `zig build` subprocesses; no graph
+    // dependency needed. Mirror of the same gate the pre-commit hook and CI run.
+    const verify = b.addSystemCommand(&.{"scripts/verify.sh"});
+    b.step("verify", "Build both impls, run lockstep + all smokes (the gate)")
+        .dependOn(&verify.step);
 }
 
 /// Feed a translate-c step SDL3's include dirs *without* linking SDL3. We can't
