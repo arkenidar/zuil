@@ -471,3 +471,33 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   Zig. **NOTE:** this change inverted the usual "C leads" order at the author's request — written
   in Zig first, then mirrored to C — but the header stayed the source of truth and both landed in
   the same change, so lockstep holds.
+- **2026-06-16** — **`grab-move` ported to native C — a "simplest thick client" on every
+  platform, no interpreter.** After exploring a thin-client / live-edit arc (HTTP-pull push,
+  remote-render, a PHP+SQLite backend — all designed but **deferred & steerable**, see
+  [umbilical.md](umbilical.md)/[events.md](events.md)/[web.md](web.md)), the chosen near-term cut
+  is the opposite, simpler end: run `grab-move` as a **plain AOT thick client** on desktop, web,
+  Android and iOS. New `examples/grab-move/grab-move.c` is a line-for-line twin of `main.lua` over
+  the **existing M1 C ABI** (no new exports): one platform-blind `frame()` + app-state structs,
+  and the *only* `#ifdef` is the loop driver — a `while (zuil_frame_begin())` pump natively, an
+  `emscripten_set_main_loop` frame callback on the web (the browser loop inversion, [web.md](web.md)
+  §3, free because the pump is already non-blocking). A cross-platform `main()` via SDL's
+  `SDL_main.h` becomes `SDL_main` on Android/iOS. **Rationale:** with live-edit dropped, scripting
+  buys nothing, and one C source sidesteps the FFI (LuaJIT) vs C-API (PUC-Lua) binding split that
+  no-JIT/no-dlopen platforms (iOS, web) would otherwise force — pushing *source* is moot when you
+  ship *AOT code*. **Build wiring** (no ABI change): `build.zig` gains `grab-move-web`/`-serve`
+  (emcc link of the app, mirroring `wasm-smoke`/`-serve`) and, under `-Dandroid`, a `libmain.so`
+  app target (the demo statically? no — links the dynamic `libzuil.so` as a clean `NEEDED`,
+  resolved from `nativeLibraryDir`) plus a new **`-Dabi=x86_64|arm64-v8a`** option so the KVM
+  emulator (x86_64) and devices (arm64) both build; `examples/grab-move/android/build-apk.sh`
+  packages a signed APK via the no-Gradle spike-C recipe (aapt2/d8/zipalign/apksigner). Also fixed
+  a latent wasm issue: the Debug C build emitted `__ubsan_handle_*` calls whose runtime emcc
+  doesn't provide → `sanitize_c = .off` for the wasm module (desktop/Android keep the checks).
+  **Verified:** desktop runs (clean `-Wall -Wextra`; headless frame-cap smoke) against **both**
+  impls (`-Dimpl=zig` parity); web emcc-links to `.wasm`/`.js`/`.html`; **Android built →
+  packaged → installed → launched → rendered** the real grab-move UI on the android-35 x86_64
+  emulator (logcat: `Running main function SDL_main … libmain.so`, RGBA8888 renderer up, screencap
+  shows tabs + handles + the clipped panel). **iOS is design-only on the Linux host** (needs
+  macOS/Xcode): `examples/grab-move/ios/README.md` gives the recipe — drop `src/zuil.c` +
+  `grab-move.c` into an Xcode target with `SDL3.xcframework`, the C-first hedge meaning no
+  cross-build step is even required; the `__APPLE__` entry uses the same `SDL_main.h` shape proven
+  on Android.

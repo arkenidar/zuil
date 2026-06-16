@@ -81,6 +81,24 @@ Desktop M1 demo (runs on **both** impls — lockstep restored 2026-06-14):
 `-Dimpl` composes with `-Dandroid` / `-Dwasm`; ABI-touching changes must pass
 the smokes under **both** impls.
 
+**Native C twin — a thick client on every platform (2026-06-16).**
+`examples/grab-move/grab-move.c` is a line-for-line C port of `main.lua` over the
+*same* M1 C ABI (no new exports, no Lua/FFI/interpreter): one platform-blind
+`frame()` + a per-platform loop driver (a `while (zuil_frame_begin())` pump
+natively; `emscripten_set_main_loop` on the web). Same source AOT-builds for
+desktop/web/Android/iOS — the "simplest thick client" (the thin-client/live-edit
+arc is designed but deferred; see the decision log). Build/run:
+
+    # Desktop (gcc hedge): cc examples/grab-move/grab-move.c -Iinclude -o grab-move \
+    #   zig-out/lib/libzuil.so $(pkg-config --cflags --libs sdl3)   ;  ./grab-move [frames]
+    EMSDK=~/apps/em-sdk zig build -Dwasm grab-move-web     # emcc link of the app (build gate)
+    EMSDK=~/apps/em-sdk zig build -Dwasm grab-move-serve   # serve …/grab-move.html
+    examples/grab-move/android/build-apk.sh                # signed APK (no Gradle); ABI=arm64-v8a for devices
+
+Android now takes **`-Dabi=x86_64|arm64-v8a`** (x86_64 = the KVM emulator); the
+`-Dandroid` build also emits the app `libmain.so` (`grab-move-apk-libs` step).
+iOS is design-only on Linux — `examples/grab-move/ios/README.md`.
+
 No-Zig fallback (the toolchain hedge — `build.zig` is convenience, not a
 dependency). When `zig` is missing or its pinned dev API has drifted and
 `zig build` breaks, the C core still builds the desktop `.so` with any C compiler,
@@ -99,9 +117,9 @@ path); `SDL3.dll` must be on `PATH` at runtime (`export PATH="/c/msys64/mingw64/
 
 Android cross-build (needs `unzip` on PATH):
 
-    zig build -Dandroid -Dndk=<NDK_ROOT> -Daar=<SDL3.aar>
+    zig build -Dandroid -Dndk=<NDK_ROOT> -Daar=<SDL3.aar>      # add -Dabi=x86_64 for the emulator
     # or via env: ANDROID_NDK_HOME / ANDROID_NDK_ROOT, ZUIL_SDL3_AAR
-    # -> zig-out/jniLibs/arm64-v8a/libzuil.so  +  zig-out/lib/arm64-v8a/libzuil.a
+    # -> zig-out/jniLibs/<abi>/libzuil.so  +  zig-out/lib/<abi>/libzuil.a   (<abi> = arm64-v8a default)
 
 Web cross-build (static-only — the web has no dlopen; see docs/web.md):
 
@@ -153,6 +171,9 @@ Emscripten SDL3 *port's* version, not the desktop 3.2.10.
     src/cdefs.h                SDL3 root header for the translate-c step (Zig impl only)
     examples/smoke.{lua,py}    FFI / ctypes smoke tests
     examples/smoke_web.c       emcc-side driver for the wasm smoke (wasm-smoke/-serve)
+    examples/grab-move/        the M1 demo: main.lua (LuaJIT) + grab-move.c (native C twin, all platforms)
+    examples/grab-move/android/  AndroidManifest.xml + build-apk.sh (no-Gradle APK packaging)
+    examples/grab-move/ios/    Xcode build recipe (design-only on Linux)
     docs/architecture.md       design record — READ FIRST; has the decision log
     docs/m1.md                 M1 execution plan — sub-steps, spikes, smoke gates; read before M1 work
     docs/{canvas,layout,mobile,bindings,scripting,web,events,umbilical}.md  topic deep-dives

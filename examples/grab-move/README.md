@@ -32,6 +32,34 @@ is present. See [**Building without Zig**](../../README.md#building-without-zig)
 fallback ladder and the Windows/MSYS2 note (`SDL3.dll` on `PATH`,
 `mingw-w64-x86_64-luajit`).
 
+## Native C — a thick client on every platform (no interpreter)
+
+[grab-move.c](grab-move.c) is a line-for-line C twin of [main.lua](main.lua) over the same
+C ABI — **no Lua, no FFI, no scripting host**. One platform-blind `frame()` plus a per-platform
+loop driver (a `while`-pump everywhere; `emscripten_set_main_loop` on the web) AOT-compiles the
+*same source* for desktop, web, Android and iOS. This is the "simplest thick client" path:
+scripting buys nothing once you don't need live-edit, and plain C sidesteps the
+LuaJIT-vs-PUC-Lua / FFI-vs-C-API split that no-JIT platforms (iOS, web) would otherwise force.
+
+```sh
+# Desktop — the gcc hedge (cc / clang / `zig cc` are drop-in)
+zig build                                   # or the gcc one-liner above -> libzuil.so
+cc examples/grab-move/grab-move.c -Iinclude -o grab-move \
+   zig-out/lib/libzuil.so $(pkg-config --cflags --libs sdl3)
+./grab-move           # interactive;   ./grab-move 60   caps frames (headless smoke)
+
+# Web (wasm) — emcc owns the link; the pump becomes a frame callback (loop inversion)
+EMSDK=~/apps/em-sdk zig build -Dwasm grab-move-web      # link only (the build gate)
+EMSDK=~/apps/em-sdk zig build -Dwasm grab-move-serve    # serve 127.0.0.1:8080/grab-move.html
+
+# Android — native libmain.so + the no-Gradle spike-C packaging -> signed APK
+examples/grab-move/android/build-apk.sh                 # x86_64 (KVM emulator)
+ABI=arm64-v8a examples/grab-move/android/build-apk.sh   # a real device
+```
+
+iOS is **design-only on a Linux host** (needs macOS/Xcode) — see [ios/README.md](ios/README.md);
+the source's `__APPLE__` entry already uses the same `SDL_main.h` shape proven on Android.
+
 ## What it demonstrates
 
 - **Draggable handles** — drag to move; grabbing brings a handle to front and tints it red.
