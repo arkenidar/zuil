@@ -19,6 +19,7 @@ ffi.cdef([[
 
   void  zuil_set_font_scale(float s);
   void  zuil_draw_text(float x, float y, const char *utf8);
+  void  zuil_set_font_style(int flags);
   float zuil_text_width(const char *utf8);
   float zuil_text_height(void);
   float zuil_font_advance(void);
@@ -87,7 +88,9 @@ function zuil.rect(x, y, w, h) C.zuil_draw_rect(x, y, w, h) end
 function zuil.line(x1, y1, x2, y2) C.zuil_draw_line(x1, y1, x2, y2) end
 
 -- text (built-in bitmap font; mechanism only — rich text is user-space runs)
+zuil.REGULAR, zuil.BOLD, zuil.ITALIC = 0, 1, 2 -- style flags (OR for bold-italic)
 function zuil.font_scale(s) C.zuil_set_font_scale(s) end
+function zuil.font_style(flags) C.zuil_set_font_style(flags or 0) end
 function zuil.text(s, x, y) C.zuil_draw_text(x, y, s) end
 function zuil.text_width(s) return C.zuil_text_width(s) end
 function zuil.text_height() return C.zuil_text_height() end

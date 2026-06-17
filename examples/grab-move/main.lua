@@ -131,6 +131,7 @@ local function styled_line(x, y, runs)
   local pen = x
   for _, run in ipairs(runs) do
     zuil.font_scale(run.scale or 1)
+    zuil.font_style(run.style or zuil.REGULAR)
     zuil.color(run.r, run.g, run.b)
     zuil.text(run.text, pen, y)
     local w, h = zuil.text_width(run.text), zuil.text_height()
@@ -138,6 +139,7 @@ local function styled_line(x, y, runs)
     pen = pen + w
   end
   zuil.font_scale(1)
+  zuil.font_style(zuil.REGULAR)
 end
 
 -- a clipped, draggable panel (shows clip + translate) ------------------------
@@ -207,10 +209,13 @@ zuil.run(function()
   draw_handles()
   draw_panel()
 
-  -- styled-runs demo: rich text falls out of the primitives (no core markup)
+  -- styled-runs demo: rich text falls out of the primitives (no core markup);
+  -- the real bold/italic faces come from zuil.font_style (atlas style pages).
   styled_line(60, 460, {
-    { text = "rich ",     r = 0.6, g = 0.8, b = 1.0, scale = 2, underline = true },
-    { text = "text ",     r = 1.0, g = 0.8, b = 0.3, scale = 2 },
-    { text = "= runs",    r = 0.7, g = 0.7, b = 0.7, scale = 1 },
+    { text = "regular ", r = 0.85, g = 0.85, b = 0.85, scale = 2 },
+    { text = "bold ",    r = 0.6,  g = 0.8,  b = 1.0,  scale = 2, style = zuil.BOLD },
+    { text = "italic ",  r = 1.0,  g = 0.8,  b = 0.3,  scale = 2, style = zuil.ITALIC },
+    { text = "both",     r = 0.9,  g = 0.5,  b = 0.9,  scale = 2, style = zuil.BOLD + zuil.ITALIC,
+      underline = true },
   })
 end, tonumber(arg and arg[1])) -- optional frame cap for headless smoke
