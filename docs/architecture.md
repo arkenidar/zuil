@@ -76,11 +76,13 @@ unchanged:
 - **Input, two ways**: the raw **event queue** (`poll_event`) *and* a derived per-frame
   **snapshot** — mouse pos/buttons/modifiers plus *edges* (pressed-this-frame,
   released-this-frame, text-entered-this-frame).
-- **Text services**: glyph draw + measurement (`zuil_draw_text`, `zuil_text_width/height`,
-  `zuil_font_advance`) — **landed 2026-06-15 as a built-in 1-bit bitmap font, not SDL3_ttf** (both
-  impls; see the decision log). Still to come: **text-input / IME** enable + the entered-text
-  events (need the platform IME), and the big high-detail / Unicode atlas with bold/italic style
-  pages. (Measurement cannot be done in user-space — it needs the font engine.)
+- **Text services**: glyph draw + measurement + **style** (`zuil_draw_text`,
+  `zuil_text_width/height`, `zuil_font_advance`, `zuil_set_font_style`) — **a built-in bitmap font,
+  not SDL3_ttf** (both impls; see the decision log). Landed 2026-06-15 (1-bit 8×8), upgraded
+  2026-06-18 to real **bold/italic style pages** from a TTF-rasterized RLE atlas. Still to come:
+  **UTF-8 / Unicode coverage**, **colored glyphs** (emoji, a future RGBA page depth), and
+  **text-input / IME** (needs the platform IME). (Measurement cannot be done in user-space — it
+  needs the font engine.)
 - **An id-keyed interaction registry**: `hot` / `active` / `focused` tracked by id, plus a
   hit-test helper. *This is the shared heart that makes both disciplines work.*
 - **A redraw-policy switch**: continuous (every frame) *or* on-invalidate.
@@ -224,11 +226,11 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   default), input snapshot + event queue, draw vocabulary, clip, id/hit-test/focus registry. A
   first immediate-mode demo. **Execution plan: [m1.md](m1.md)** — spike-first sub-steps,
   smoke gates, and the milestone fence.
-- **M2 — text + pixels.** **Text landed early as a built-in 1-bit bitmap font, not SDL3_ttf**
-  (`zuil_draw_text` + measurement; see the 2026-06-15 decision-log entry). Remaining M2: IME /
-  soft-keyboard, `blit_rgba` software framebuffer, and the big high-detail / Unicode atlas
-  (RLE-packed, with bold/italic style pages). SDL3_ttf, if ever wanted, is now an optional add-on,
-  not the text plan.
+- **M2 — text + pixels.** **Text landed early as a built-in bitmap font, not SDL3_ttf**
+  (`zuil_draw_text` + measurement, 2026-06-15; real **bold/italic** style pages from a
+  TTF-rasterized RLE atlas, 2026-06-18 — see the decision log). Remaining M2: **UTF-8 / Unicode
+  coverage** then **colored glyphs** (emoji RGBA pages), IME / soft-keyboard, and `blit_rgba`
+  software framebuffer. SDL3_ttf, if ever wanted, is now an optional add-on, not the text plan.
 - **Widget module.** An optional user-space immediate-mode widget set; a retained convention
   documented alongside for forms/text.
 
@@ -574,3 +576,28 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   **wasm32** leg (there the struct is 20 B / align 4) — the self-check accessors make it a
   one-line assertion once an emcc event smoke is wired; the cross-pointer-width claim is proven
   on x86-64 only until then.
+
+- **2026-06-18** — **Text step 2: real bold/italic via TTF-rasterized style pages + a 1-bit RLE
+  container.** Built the forward path the 2026-06-15 entry spec'd. The 8×8 single page is replaced
+  by a **container of four style pages** — regular / bold / italic / bold-italic — each a real
+  **DejaVu Sans Mono** face rendered 1-bit by the dev-only generator (now `tools/gen_font_atlas.py`,
+  using Pillow/FreeType — fine because it never ships; only the rendered *bitmaps* are committed,
+  clean for the Unlicense). New ABI `zuil_set_font_style(flags)` + `ZUIL_FONT_REGULAR/BOLD/ITALIC`
+  selects a page by index (OR for bold-italic); sticky like the scale, and since the faces are
+  fixed-width it never changes the advance, so measurement is untouched. **Cell size is now
+  data-driven** (auto-fit to the font — 12×19 here — written into the container and read by both
+  impls; no more hardcoded 8), so `text_width`/`height`/`advance` follow the active page.
+  **Container** (`src/font_atlas.{h,bin}`, renamed from the now-false `font8x8.*`): an 8-byte
+  header + per-page `{cell_w,cell_h,first,count,depth,enc,data_len,data}`, parsed by identical
+  logic in both impls (C `#include`s the byte blob; Zig `@embedFile`s the same bytes — gcc hedge
+  still build-step-free). **RLE, now that it pays:** each page ships **raw-or-RLE, whichever is
+  smaller** (per-page `enc`); at the 12×19 cell the toggle-RLE 1-bit codec wins on every page
+  (raw 3648 → ~2.7–2.9 KB, ~24%). The user's framing is baked in structurally: **RLE is for the
+  1-bit (`depth=1`) case**; the per-page **`depth` flag reserves a `depth=32` RGBA path for
+  *colored* glyphs (emoji), which bypass RLE** — and Unicode is *not* inherently colored (most
+  scripts are mono outlines, RLE-friendly), so **UTF-8 + Unicode coverage is the next slice** and
+  colored emoji the one after. Authored Zig-first then mirrored to C again (author's preference),
+  in lockstep behind the header. Verified: both impls build + headless `grab-move` (its styled-runs
+  line now shows regular/bold/italic/both from the real faces); a white-box `SDL_RenderReadPixels`
+  check asserts bold has more ink than regular and italic differs; the gcc hedge builds with zero
+  Zig; `nm` confirms `zuil_set_font_style` exported by both impls.
