@@ -30,6 +30,10 @@ Source & build instructions: <https://github.com/arkenidar/zuil>
 - [Umbilical](umbilical.md) — **script deployment & remote dev cycling**: logic-push first, the
   channel catalogue (script/logs/eval/assets), topologies incl. `adb reverse` and VPS, the
   framed-TCP-push protocol with HTTP-pull fallback, and **debugging as procedures**.
+- [Remote dev](remote-dev.md) — the **consolidation** of remote dev: the edit→see loop *and* the
+  *perceive / act / inspect / state* substrate (synthetic input, readable pixels, semantic
+  description, reactivity disciplines, record-replay, AI operability) serving both deterministic
+  testing and AI-agent operability, with the expanded security surface.
 - [M1 plan](m1.md) — the **M1 execution plan**: spike-first sub-steps (events-ABI, wasm pump
   inversion), the smoke-gate matrix, and what is fenced out of the milestone.
 - [Analysis](analysis.md) — a curated descriptive analysis of the whole project: code-vs-design

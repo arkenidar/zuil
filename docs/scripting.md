@@ -251,3 +251,6 @@ So: **Lua opens the way for ZUIL; ZUIL (proven via Lua) opens the way for C++.**
   opt-in transport, the async/await position.
 - [Umbilical](umbilical.md) — script deployment & remote dev cycling: channels, topologies,
   protocol, debugging procedures.
+- [Remote dev](remote-dev.md) — the consolidated record: the edit→see loop plus the
+  perceive/act/inspect/state substrate (synthetic input, readable pixels, semantic description,
+  reactivity, record-replay, AI operability, expanded security).

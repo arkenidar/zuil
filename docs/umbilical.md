@@ -227,3 +227,6 @@ Firmness grades as in [events.md](events.md) §8: 1 = hard … 10 = soft.
 - [Web / WASM](web.md) — the browser thin client (§5) and the REPL channel (§7) this doc's
   `eval` channel realizes.
 - [Mobile](mobile.md) — the Android packaging the device host rides on.
+- [Remote dev](remote-dev.md) — the consolidation this doc's edit→see loop is one half of: the
+  perceive/act/inspect/state substrate (synthetic input, readable pixels, semantic description,
+  reactivity, record-replay, AI operability) layered over these same channels.

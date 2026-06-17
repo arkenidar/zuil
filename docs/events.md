@@ -274,5 +274,8 @@ soft (deliberately open). The gradient extends analysis.md's firm-vs-semi-fluid 
   (§5), the REPL channel this doc gives event-level mechanics (§7).
 - [Umbilical](umbilical.md) — the protocol layered over this mechanism: script-push, the
   channel catalogue, topologies, and remote debugging procedures.
+- [Remote dev](remote-dev.md) — what the injection primitive and `message`/`timer` events become
+  upstream: synthetic input, record-replay, readable pixels, semantic description, and the
+  reactivity disciplines that ride the redraw switch + wakes.
 - [Bindings](bindings.md) — the faces that will each grow their own async sugar over the one
   C ABI.
