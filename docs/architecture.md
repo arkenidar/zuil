@@ -551,3 +551,26 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   *native* ABI, never pushed Lua). Docs-only change — no ABI touched, the hard gate stays green by
   construction. Sequencing: `zuil_read_pixels` is the lowest-cost promotable bit; reactivity needs
   no core work; the rest defers with its owners.
+- **2026-06-18** — **Spike E run: the event struct crosses the FFI as a measured artifact.**
+  The M1.1 spike ([m1.md](m1.md) §3) — long *sidestepped* by M1.4's snapshot accessors, never
+  *run* — was implemented as a synthetic-event harness with **no SDL in the path**:
+  `zuil_test_emit` posts into a **bounded** in-process queue (cap 64, **fail-fast** on full per
+  events.md §3), `zuil_event_poll` drains it, and the *same* event is read **both** ways — the
+  raw `ZuilEvent` cdata/`Structure` (via the `out` param) and per-field **accessors** (off an
+  internal latch) — so one round-trip is read either way and the two timed. `ZuilEvent` is a
+  **flat struct** (`int type` discriminant + three reused `a/b/c` scalar slots + one `payload`
+  pointer), chosen over a C union so there is no union-alignment surprise; the payload pointer
+  is the only width-varying field, guarded by `zuil_event_struct_size/align` self-check
+  accessors. **Measured exit:** the layout is portable and self-checking — LuaJIT and ctypes
+  both matched the binary (**24 B / align 8** on x86-64) across **both** impls; the
+  borrow-until-next-poll payload round-trips through a Lua string / Python `bytes`; the cost gap
+  is real but negligible (raw cdata reads ~**3–4×** cheaper than accessor calls, a few ns/field,
+  lost in the noise at frame-rate event volumes). **Decision:** M1.5's queued events take the
+  **raw `ZuilEvent` struct** as the primary face (cheaper read, layout now proven to cross both
+  FFIs identically, so freezing the flat shape is free); the accessor face is **kept** as the
+  soft-layout escape hatch — M1.4's snapshot accessors are **not** reversed, the two faces
+  coexist. Landed in lockstep (header + `src/zuil.c` + `src/zuil.zig`, +12 exports → 37 total),
+  with `examples/event_smoke.{lua,py}` gated as `scripts/verify.sh` step 5. **Outstanding:** the
+  **wasm32** leg (there the struct is 20 B / align 4) — the self-check accessors make it a
+  one-line assertion once an emcc event smoke is wired; the cross-pointer-width claim is proven
+  on x86-64 only until then.

@@ -35,11 +35,23 @@ exists in code (grep `include/zuil.h` for the current surface):
 **Lockstep restored (2026-06-14).** The slice was first landed `-Dimpl=zig`-only; the C twin
 (`src/zuil.c`) is now a line-for-line port of the same symbols, so `zig build -Dimpl=c` and
 `-Dimpl=zig` both export the full surface and pass `examples/grab-move/_smoke.lua`. The
-header's lockstep invariant holds again. **Still designed-not-built**: `src/c_abi.zig`
-core/veneer split, `event_post`/
-message/timer, the `hot`/`active`/`focused` id-registry, **text-input/IME** (glyph draw +
-measurement *do* exist now — see above), `blit_rgba`, the widget
-module — grep before assuming any exist.
+header's lockstep invariant holds again.
+
+- **Spike E — the event struct across the FFI (landed 2026-06-18)**: a *synthetic-event*
+  harness, no SDL in the path — `zuil_test_emit` posts into a bounded queue, `zuil_event_poll`
+  drains it, and the same `ZuilEvent` (a flat `type`+`a/b/c`+`payload`-pointer struct) is read
+  **both** as raw cdata and via per-field accessors (`zuil_event_type/a/b/c/payload/payload_len`),
+  plus `zuil_event_struct_size/align` self-check. Measured the raw-struct-vs-accessor cost and
+  exited with: M1.5 events take the **raw struct** (cheaper, layout proven portable), accessors
+  kept as the soft fallback. Both impls; `examples/event_smoke.{lua,py}` (verify.sh step 5). See
+  `docs/architecture.md` §10 (2026-06-18) and `docs/m1.md` §3. This is the spike's *measurement
+  harness* — the real `event_post`/message/timer **traffic** is still M1.5 (below).
+
+**Still designed-not-built**: `src/c_abi.zig` core/veneer split, the real
+`event_post`/message/timer traffic + thread-safe SDL substrate (Spike E above is the synthetic
+measurement harness only, x86-64 desktop — the wasm32 leg is still unrun), the
+`hot`/`active`/`focused` id-registry, **text-input/IME** (glyph draw + measurement *do* exist
+now — see above), `blit_rgba`, the widget module — grep before assuming any exist.
 
 `docs/architecture.md` is the authoritative design record (mechanism vs policy,
 immediate-mode default, one-core-two-faces). Read it before extending the API;
