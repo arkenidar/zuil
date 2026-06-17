@@ -6,8 +6,9 @@
 //!
 //! M1 desktop slice: a poll-style, callback-free window + draw + input
 //! mechanism. The consumer owns the loop (frame_begin/frame_end); input is read
-//! as a derived per-frame snapshot through accessor functions (no event struct
-//! crosses the ABI yet — that layout stays soft, see docs/m1.md Spike E).
+//! as a derived per-frame snapshot through accessor functions. Spike E (the
+//! synthetic event struct + queue at the bottom of this file) measures the
+//! raw-struct-vs-accessor cost the snapshot sidestepped — see docs/m1.md §3.
 const std = @import("std");
 const c = @import("cdefs");
 
@@ -349,4 +350,98 @@ export fn zuil_pop() callconv(.c) void {
 export fn zuil_translate(ddx: f32, ddy: f32) callconv(.c) void {
     g_tx += ddx;
     g_ty += ddy;
+}
+
+// --- Spike E: synthetic event queue + read faces (no SDL) -----------------
+// Twin of src/zuil.c's Spike E block: a bounded in-process queue drained with
+// NO SDL in the path, exposed through both a raw struct (the out param) and the
+// accessor face (the latch) so one round-trip is read either way and timed.
+// Single-threaded for the measurement; the thread-safe SDL substrate is M1.5.
+const EVQ_CAP = 64; // bounded; post fails fast when full (events.md §3)
+const EVPAYLOAD_CAP = 256; // max bytes copied per message event
+
+// extern: this is THE C-ABI struct (matches include/zuil.h ZuilEvent by layout —
+// 4 c_int + one pointer; the pointer is the only width-varying field).
+const ZuilEvent = extern struct {
+    type: c_int,
+    a: c_int,
+    b: c_int,
+    c: c_int,
+    payload: ?[*]const u8,
+};
+
+const EvSlot = struct {
+    type: c_int = 0,
+    a: c_int = 0,
+    b: c_int = 0,
+    c: c_int = 0,
+    payload_len: c_int = 0,
+    payload: [EVPAYLOAD_CAP]u8 = std.mem.zeroes([EVPAYLOAD_CAP]u8),
+};
+
+var g_evq = std.mem.zeroes([EVQ_CAP]EvSlot); // ring buffer
+var g_evq_head: usize = 0;
+var g_evq_count: usize = 0;
+var g_ev_latch: EvSlot = .{}; // the one event the accessor face reads
+var g_ev_have: bool = false;
+
+export fn zuil_test_emit(ev_type: c_int, a: c_int, b: c_int, cc: c_int, payload: ?[*]const u8, payload_len: c_int) callconv(.c) c_int {
+    if (g_evq_count >= EVQ_CAP) return -1; // full: fail fast, never block
+    var n: usize = if (payload_len > 0) @intCast(payload_len) else 0;
+    if (n > EVPAYLOAD_CAP) return -2; // oversized payload: reject
+    if (payload == null) n = 0;
+    const tail = (g_evq_head + g_evq_count) % EVQ_CAP;
+    const s = &g_evq[tail];
+    s.type = ev_type;
+    s.a = a;
+    s.b = b;
+    s.c = cc;
+    s.payload_len = @intCast(n);
+    if (n > 0) @memcpy(s.payload[0..n], payload.?[0..n]);
+    g_evq_count += 1;
+    return 0;
+}
+
+export fn zuil_event_poll(out: ?*ZuilEvent) callconv(.c) c_int {
+    if (g_evq_count == 0) {
+        g_ev_have = false;
+        return 0;
+    }
+    g_ev_latch = g_evq[g_evq_head]; // copy slot -> latch: borrow source for accessors
+    g_evq_head = (g_evq_head + 1) % EVQ_CAP;
+    g_evq_count -= 1;
+    g_ev_have = true;
+    if (out) |o| {
+        o.type = g_ev_latch.type;
+        o.a = g_ev_latch.a;
+        o.b = g_ev_latch.b;
+        o.c = g_ev_latch.c;
+        o.payload = if (g_ev_latch.payload_len != 0) &g_ev_latch.payload else null;
+    }
+    return 1;
+}
+
+export fn zuil_event_type() callconv(.c) c_int {
+    return if (g_ev_have) g_ev_latch.type else 0;
+}
+export fn zuil_event_a() callconv(.c) c_int {
+    return if (g_ev_have) g_ev_latch.a else 0;
+}
+export fn zuil_event_b() callconv(.c) c_int {
+    return if (g_ev_have) g_ev_latch.b else 0;
+}
+export fn zuil_event_c() callconv(.c) c_int {
+    return if (g_ev_have) g_ev_latch.c else 0;
+}
+export fn zuil_event_payload() callconv(.c) ?[*]const u8 {
+    return if (g_ev_have and g_ev_latch.payload_len != 0) &g_ev_latch.payload else null;
+}
+export fn zuil_event_payload_len() callconv(.c) c_int {
+    return if (g_ev_have) g_ev_latch.payload_len else 0;
+}
+export fn zuil_event_struct_size() callconv(.c) c_int {
+    return @intCast(@sizeOf(ZuilEvent));
+}
+export fn zuil_event_struct_align() callconv(.c) c_int {
+    return @intCast(@alignOf(ZuilEvent));
 }

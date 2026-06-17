@@ -76,6 +76,68 @@ void zuil_push(void);                 /* save current translation */
 void zuil_pop(void);                  /* restore it */
 void zuil_translate(float dx, float dy);
 
+/* ---------------------------------------------------------------------------
+ * Spike E — the event struct across the FFI boundary (docs/m1.md §3 / M1.1).
+ *
+ * The input *snapshot* above sidestepped this spike on the desktop face by
+ * choosing accessors. But M1.5's event_post / message / timer traffic needs a
+ * payload that genuinely crosses the ABI, so the raw-struct-vs-accessor cost
+ * has to be measured, not argued. This is that measurement, with NO SDL in the
+ * path: zuil_test_emit posts a synthetic event into a bounded in-process queue;
+ * zuil_event_poll drains it. Both read faces are exported off the SAME drain so
+ * a single round-trip can be read either way and the two timed against each
+ * other (examples/event_smoke.lua does the LuaJIT bench).
+ *
+ * Representation: a FLAT struct with per-type reused scalar slots (a/b/c) — the
+ * "flat struct with dead fields" candidate, chosen over a C union so there is
+ * no union-alignment surprise to read identically across wasm32 / x86-64 /
+ * arm64. The discriminant is `type`. The payload pointer is the only width-
+ * varying field (4 bytes on wasm32, 8 elsewhere); each FFI face asserts its
+ * header matches the built binary via zuil_event_struct_size/align.
+ * ------------------------------------------------------------------------- */
+
+/* Event discriminant + the meaning of the a/b/c slots per type. */
+enum {
+    ZUIL_EV_NONE    = 0,
+    ZUIL_EV_MOUSE   = 1, /* a = x,        b = y,           c = button bitmask */
+    ZUIL_EV_KEY     = 2, /* a = scancode, b = modifiers,   c = 0              */
+    ZUIL_EV_MESSAGE = 3, /* a = channel,  b = payload_len,  payload = bytes   */
+    ZUIL_EV_TIMER   = 4  /* a = timer id, b = 0,           c = 0              */
+};
+
+typedef struct ZuilEvent {
+    int            type;       /* one of ZUIL_EV_* */
+    int            a, b, c;    /* per-type scalar slots (see enum) */
+    const unsigned char *payload; /* ZUIL_EV_MESSAGE only: borrowed bytes,
+                                   * valid until the next poll/emit; else NULL */
+} ZuilEvent;
+
+/* Post one synthetic event (no SDL). payload may be NULL/0. The queue is
+ * bounded and posting FAILS FAST (events.md §3): returns 0 on success, <0 when
+ * the queue is full or the payload exceeds the per-event capacity. */
+int zuil_test_emit(int type, int a, int b, int c,
+                   const unsigned char *payload, int payload_len);
+
+/* Dequeue the next event. Latches it internally (for the accessor face below)
+ * and, if out != NULL, copies it (the raw-struct face). Returns 1 if an event
+ * was dequeued, 0 if the queue was empty. */
+int zuil_event_poll(ZuilEvent *out);
+
+/* Accessor read face — valid after a zuil_event_poll that returned 1, until the
+ * next poll. One FFI call per field, vs reading the struct cdata directly. */
+int zuil_event_type(void);
+int zuil_event_a(void);
+int zuil_event_b(void);
+int zuil_event_c(void);
+const unsigned char *zuil_event_payload(void);
+int zuil_event_payload_len(void);
+
+/* Layout self-check: the struct's size/alignment as the binary laid it out, so
+ * each face can assert its own ZuilEvent header matches (the cross-pointer-width
+ * concern). Returns bytes. */
+int zuil_event_struct_size(void);
+int zuil_event_struct_align(void);
+
 #ifdef __cplusplus
 }
 #endif

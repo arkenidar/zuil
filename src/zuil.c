@@ -360,3 +360,71 @@ void zuil_translate(float ddx, float ddy)
     g_tx += ddx;
     g_ty += ddy;
 }
+
+/* --- Spike E: synthetic event queue + read faces (no SDL) ----------------- */
+/* A bounded in-process queue exercised with NO SDL in the path — zuil_test_emit
+ * posts synthetic events, zuil_event_poll drains them. Two read faces hang off
+ * the SAME drain (raw struct via the out param; accessors via the latch) so one
+ * round-trip can be read either way and the two timed against each other. Single
+ * -threaded for the measurement; the thread-safe SDL user-event substrate is
+ * M1.5's job (events.md §3). Mirror of src/zuil.zig. */
+#define EVQ_CAP        64  /* bounded; post fails fast when full (events.md §3) */
+#define EVPAYLOAD_CAP 256  /* max bytes copied per message event */
+
+typedef struct {
+    int type, a, b, c;
+    int payload_len;
+    unsigned char payload[EVPAYLOAD_CAP];
+} EvSlot;
+
+static EvSlot g_evq[EVQ_CAP];  /* ring buffer */
+static size_t g_evq_head = 0;
+static size_t g_evq_count = 0;
+static EvSlot g_ev_latch;      /* the one event the accessor face reads */
+static bool   g_ev_have = false;
+
+int zuil_test_emit(int type, int a, int b, int c,
+                   const unsigned char *payload, int payload_len)
+{
+    if (g_evq_count >= EVQ_CAP) return -1;     /* full: fail fast, never block */
+    if (payload_len < 0) payload_len = 0;
+    if (payload_len > EVPAYLOAD_CAP) return -2; /* oversized payload: reject */
+    size_t tail = (g_evq_head + g_evq_count) % EVQ_CAP;
+    EvSlot *s = &g_evq[tail];
+    s->type = type; s->a = a; s->b = b; s->c = c;
+    s->payload_len = (payload && payload_len) ? payload_len : 0;
+    if (s->payload_len) SDL_memcpy(s->payload, payload, (size_t)s->payload_len);
+    g_evq_count += 1;
+    return 0;
+}
+
+int zuil_event_poll(ZuilEvent *out)
+{
+    if (g_evq_count == 0) { g_ev_have = false; return 0; }
+    g_ev_latch = g_evq[g_evq_head]; /* copy slot -> latch: borrow source for the accessors */
+    g_evq_head = (g_evq_head + 1) % EVQ_CAP;
+    g_evq_count -= 1;
+    g_ev_have = true;
+    if (out) {
+        out->type = g_ev_latch.type;
+        out->a = g_ev_latch.a;
+        out->b = g_ev_latch.b;
+        out->c = g_ev_latch.c;
+        out->payload = g_ev_latch.payload_len ? g_ev_latch.payload : NULL;
+    }
+    return 1;
+}
+
+int zuil_event_type(void) { return g_ev_have ? g_ev_latch.type : ZUIL_EV_NONE; }
+int zuil_event_a(void)    { return g_ev_have ? g_ev_latch.a : 0; }
+int zuil_event_b(void)    { return g_ev_have ? g_ev_latch.b : 0; }
+int zuil_event_c(void)    { return g_ev_have ? g_ev_latch.c : 0; }
+
+const unsigned char *zuil_event_payload(void)
+{
+    return (g_ev_have && g_ev_latch.payload_len) ? g_ev_latch.payload : NULL;
+}
+int zuil_event_payload_len(void) { return g_ev_have ? g_ev_latch.payload_len : 0; }
+
+int zuil_event_struct_size(void)  { return (int)sizeof(ZuilEvent); }
+int zuil_event_struct_align(void) { return (int)_Alignof(ZuilEvent); }
