@@ -251,6 +251,9 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   opt-in transport module, and the async/await position (the pump as reactor).
 - **[Umbilical](umbilical.md)** — script deployment & remote dev cycling: the channel catalogue,
   topologies, framed-TCP-push protocol, and debugging as procedures.
+- **[Remote dev](remote-dev.md)** — the consolidation: the edit→see loop *and* the
+  perceive/act/inspect/state substrate (synthetic input, readable pixels, semantic description,
+  reactivity disciplines, record-replay, AI operability, the expanded security surface).
 
 ---
 
@@ -522,3 +525,29 @@ per-language duplication. (The "native widget objects are painful" caveat applie
   discoverability/hedge wrapper (no second build system); Zig's `build verify` is the idiomatic
   entry; **Gradle stays rejected** (it would undo the no-Gradle APK recipe); cmake deferred until a
   downstream C/C++ consumer needs `find_package`.
+- **2026-06-17** — **Remote dev consolidated into one design record
+  ([remote-dev.md](remote-dev.md)).** The topic was designed correctly but scattered across
+  umbilical/events/scripting; gathered it and named the synthesis: remote dev is **two
+  capabilities** — **(A)** the edit→see loop (logic-push, largely designed) and **(B)** a
+  *perceive / act / inspect / state* substrate that serves **both** deterministic record-replay
+  testing and AI-agent operability. The doc *owns the synthesis and the new decisions* and *points
+  to* the owners for every existing mechanic (both fences intact). New choices: **reactivity is
+  user-space policy** (pull/push/lazy/mixed; the core ships only the redraw switch + wakes), with
+  **pull the reload/sync-robust baseline** — it degrades most gracefully across a hot-swap while
+  lazy/push need a dependency-graph re-seed; **synthetic input is just `zuil_event_post`** (no new
+  ABI), and **record/replay** composes it with state snapshots under opt-in determinism;
+  **`zuil_read_pixels` is promoted to a candidate core primitive** (surface readback = mechanism,
+  already used in the font white-box check) while **streamed sequences stay `remote_render`
+  draw-commands** (pull pixels, stream draws); **semantic scene/widget description is a user-space
+  `describe` convention** (a `message` channel id) anchored on the core id/hit-test/focus registry —
+  the core ships no tree; **synchronization is layered**, its one new commitment a **schema
+  version + migration hook** on preserved/synced state so logic-push and state-survival compose
+  (only state values travel, the reactive graph is rebuilt locally); **AI operability is a consumer
+  of the substrate** (no AI-specific ABI, shared channels, structured observations), extending
+  web.md §7's human-and-AI REPL stance; and the **security floor is unchanged**
+  (dev-only/opt-in/excludable + SSH/token) but **widened with per-channel capability gating +
+  artifact hygiene** for the new drive/scrape/exfiltrate surface. **Verification-gated push** is
+  recorded as a hypothesis (the dev tool can replay-then-push; `scripts/verify.sh` gates the
+  *native* ABI, never pushed Lua). Docs-only change — no ABI touched, the hard gate stays green by
+  construction. Sequencing: `zuil_read_pixels` is the lowest-cost promotable bit; reactivity needs
+  no core work; the rest defers with its owners.
