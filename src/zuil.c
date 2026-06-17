@@ -13,7 +13,7 @@
 #define SDL_MAIN_HANDLED 1 /* keep SDL's header-only main shim off our entry point */
 #include <SDL3/SDL.h>
 #include "zuil.h"
-#include "font8x8.h" /* baked PD 8x8 font: zuil_font8x8 + ZUIL_FONT_* (gen by tools/gen_font8x8.py) */
+#include "font_atlas.h" /* baked style-page atlas blob: zuil_font_atlas_blob (gen by tools/gen_font_atlas.py) */
 
 /* Step 0: returns the linked SDL3 version as a packed int (3.2.10 -> 3002010). */
 int zuil_sdl_version(void)
@@ -49,22 +49,34 @@ static size_t g_clip_len = 0;
  * the same color set_color last applied to the renderer. */
 static Uint8 g_col[4] = { 0, 0, 0, 255 };
 
-/* --- text / bitmap font (mirror of src/zuil.zig) -------------------------- */
-/* The font is the public-domain 8x8 ASCII page baked by tools/gen_font8x8.py,
- * here #included from src/font8x8.h (the Zig twin @embedFile's the identical
- * src/font8x8.bin). NOT SDL3_ttf: zero extra deps, web/Android-friendly. */
-#define ATLAS_COLS 16                        /* glyph grid: 16 x 6 = 96 cells */
-#define ATLAS_ROWS (ZUIL_FONT_COUNT / ATLAS_COLS)
+/* --- text / font atlas (mirror of src/zuil.zig) --------------------------- */
+/* Glyphs come from a baked container of style PAGES (regular/bold/italic/
+ * bold-italic), each a real TTF face rendered 1-bit by tools/gen_font_atlas.py,
+ * here #included from src/font_atlas.h (the Zig twin @embedFile's the identical
+ * src/font_atlas.bin). Container + RLE format: see the generator. */
+#define ATLAS_COLS   16 /* glyph-grid columns per page texture */
+#define ATLAS_GUTTER 1  /* transparent px between cells so linear filtering can't bleed neighbours */
+#define MAX_PAGES    8
 
-/* One font PAGE = one glyph-grid texture. Array form from day one so the later
- * big high-detail atlas can add bold/italic pages without touching draw_text;
- * today only page 0 (regular) exists. */
+/* One parsed PAGE: the NATIVE (oversampled, baked) cell + the EM (nominal) cell
+ * that font_scale=1.0 maps to, the codepoint range, and where its (raw|RLE)
+ * glyph data sits in the blob. Glyphs are stored at the native cell and drawn
+ * DOWNSCALED to em*scale with linear filtering (cheap AA from a 1-bit source).
+ * Texture is built lazily and freed on window close. */
 typedef struct {
-    SDL_Texture *tex; /* white ink + alpha, BLEND mode */
-    int cols;
+    SDL_Texture *tex;
+    Uint16 cell_w, cell_h; /* native (atlas) cell */
+    Uint16 em_w, em_h;     /* em (nominal) cell = display size at scale 1.0 */
+    Uint16 first, count;
+    Uint8  depth; /* 1 = mono (RLE-able); 32 = RGBA (future emoji, raw) */
+    Uint8  enc;   /* 0 = raw, 1 = RLE */
+    size_t data_off, data_len;
 } FontPage;
 
-static FontPage g_pages[1];
+static FontPage g_pages[MAX_PAGES];
+static size_t   g_npages = 0;
+static int      g_parsed = 0;
+static size_t   g_style = 0; /* selected page index (style bits) */
 static float    g_font_scale = 1.0f;
 
 static inline float dx(float x) { return x + g_tx; }
@@ -189,44 +201,131 @@ void zuil_draw_line(float x1, float y1, float x2, float y2)
 
 /* --- bitmap text --------------------------------------------------------- */
 
-/* Build page 0's glyph-grid texture once (lazy: needs the renderer). White ink
- * + alpha so draw_text can tint it via color/alpha mod; BLEND so the
- * transparent background shows through. Recreatable: window_close nulls it. */
-static void ensure_atlas(void)
-{
-    if (!g_ren || g_pages[0].tex) return;
+static inline Uint16 rd16(size_t off) {
+    return (Uint16)(zuil_font_atlas_blob[off] | (zuil_font_atlas_blob[off + 1] << 8));
+}
+static inline Uint32 rd32(size_t off) {
+    return (Uint32)zuil_font_atlas_blob[off] | ((Uint32)zuil_font_atlas_blob[off + 1] << 8) |
+           ((Uint32)zuil_font_atlas_blob[off + 2] << 16) | ((Uint32)zuil_font_atlas_blob[off + 3] << 24);
+}
 
-    const int W = ATLAS_COLS * ZUIL_FONT_CELL; /* 128 */
-    const int H = ATLAS_ROWS * ZUIL_FONT_CELL; /* 48  */
-    Uint32 px[ATLAS_COLS * ZUIL_FONT_CELL * ATLAS_ROWS * ZUIL_FONT_CELL];
-    SDL_memset(px, 0, sizeof(px)); /* RGBA32; white=0xFFFFFFFF, bg=0 (endian-agnostic) */
-    for (int i = 0; i < ZUIL_FONT_COUNT; i++) {
-        int gx = (i % ATLAS_COLS) * ZUIL_FONT_CELL;
-        int gy = (i / ATLAS_COLS) * ZUIL_FONT_CELL;
-        for (int row = 0; row < ZUIL_FONT_CELL; row++) {
-            unsigned char bits = zuil_font8x8[i][row];
-            for (int col = 0; col < ZUIL_FONT_CELL; col++) {
-                if ((bits >> col) & 1) /* bit col (LSB) = leftmost column */
-                    px[(gy + row) * W + gx + col] = 0xFFFFFFFFu;
+/* Parse the blob's header + page table once (no renderer needed, so measurement
+ * works before the first frame). Bad/short blob -> g_npages stays 0. */
+static void ensure_parsed(void)
+{
+    if (g_parsed) return;
+    g_parsed = 1;
+    if (ZUIL_FONT_ATLAS_BLOB_LEN < 8) return;
+    if (zuil_font_atlas_blob[0] != 'Z' || zuil_font_atlas_blob[1] != 'F' ||
+        zuil_font_atlas_blob[2] != '0' || zuil_font_atlas_blob[3] != '2') return;
+    unsigned n = zuil_font_atlas_blob[4];
+    size_t off = 8, i = 0;
+    for (; i < n && i < MAX_PAGES; i++) {
+        if (off + 14 > ZUIL_FONT_ATLAS_BLOB_LEN) break;
+        Uint32 dlen = rd32(off + 10);
+        g_pages[i].cell_w = zuil_font_atlas_blob[off];
+        g_pages[i].cell_h = zuil_font_atlas_blob[off + 1];
+        g_pages[i].em_w = zuil_font_atlas_blob[off + 2];
+        g_pages[i].em_h = zuil_font_atlas_blob[off + 3];
+        g_pages[i].first = rd16(off + 4);
+        g_pages[i].count = rd16(off + 6);
+        g_pages[i].depth = zuil_font_atlas_blob[off + 8];
+        g_pages[i].enc = zuil_font_atlas_blob[off + 9];
+        g_pages[i].data_off = off + 14;
+        g_pages[i].data_len = dlen;
+        off += 14 + dlen;
+        if (off > ZUIL_FONT_ATLAS_BLOB_LEN) break;
+    }
+    g_npages = i;
+}
+
+static inline size_t active_page(void)
+{
+    return (g_style < g_npages) ? g_style : 0;
+}
+
+/* Expand a page's glyph data into a per-pixel bit buffer (1 byte/pixel, 0/1),
+ * row-major (glyph, row, col) — uniform whatever the on-disk encoding is. */
+static void expand_page(const FontPage *pg, Uint8 *out, size_t out_len)
+{
+    const unsigned char *data = &zuil_font_atlas_blob[pg->data_off];
+    size_t cw = pg->cell_w, ch = pg->cell_h, count = pg->count;
+    if (pg->enc == 1) { /* RLE: toggle run-length, starting color 0 (off) */
+        Uint8 color = 0;
+        size_t pos = 0, i = 0;
+        while (pos < out_len && i < pg->data_len) {
+            size_t run = 0;
+            while (i < pg->data_len) {
+                Uint8 b = data[i++];
+                run += b;
+                if (b != 255) break;
             }
+            for (size_t k = 0; k < run && pos + k < out_len; k++) out[pos + k] = color;
+            pos += run;
+            color ^= 1;
         }
+    } else { /* raw: cell_h rows of ceil(cw/8) bytes per glyph */
+        size_t row_bytes = (cw + 7) / 8;
+        for (size_t g = 0; g < count; g++)
+            for (size_t row = 0; row < ch; row++)
+                for (size_t col = 0; col < cw; col++) {
+                    Uint8 byte = data[(g * ch + row) * row_bytes + (col / 8)];
+                    out[(g * ch + row) * cw + col] = (byte >> (col % 8)) & 1;
+                }
+    }
+}
+
+/* Build a page's glyph-grid texture once (lazy: needs the renderer). White ink
+ * + alpha so draw_text can tint it; BLEND so the background shows through.
+ * Recreatable: window_close nulls every page's tex. */
+static void ensure_atlas(size_t pi)
+{
+    if (!g_ren) return;
+    FontPage *pg = &g_pages[pi];
+    if (pg->tex) return;
+    size_t cw = pg->cell_w, ch = pg->cell_h, count = pg->count;
+    if (!cw || !ch || !count) return;
+
+    size_t cols = ATLAS_COLS;
+    size_t rows = (count + cols - 1) / cols;
+    size_t stride_w = cw + ATLAS_GUTTER, stride_h = ch + ATLAS_GUTTER;
+    size_t W = cols * stride_w, H = rows * stride_h;
+
+    size_t nbits = count * cw * ch;
+    Uint8 *bits = SDL_malloc(nbits);
+    if (!bits) return;
+    expand_page(pg, bits, nbits);
+
+    size_t npx = W * H;
+    Uint32 *px = SDL_malloc(npx * 4);
+    if (!px) { SDL_free(bits); return; }
+    SDL_memset(px, 0, npx * 4); /* RGBA32; white=0xFFFFFFFF, bg=0 (endian-agnostic) */
+    for (size_t g = 0; g < count; g++) {
+        size_t gx = (g % cols) * stride_w, gy = (g / cols) * stride_h;
+        for (size_t row = 0; row < ch; row++)
+            for (size_t col = 0; col < cw; col++)
+                if (bits[(g * ch + row) * cw + col])
+                    px[(gy + row) * W + gx + col] = 0xFFFFFFFFu;
     }
 
     SDL_Texture *tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_RGBA32,
-                                         SDL_TEXTUREACCESS_STATIC, W, H);
-    if (!tex) return;
-    SDL_UpdateTexture(tex, NULL, px, W * (int)sizeof(Uint32));
-    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-    g_pages[0].tex = tex;
-    g_pages[0].cols = ATLAS_COLS;
+                                         SDL_TEXTUREACCESS_STATIC, (int)W, (int)H);
+    if (tex) {
+        SDL_UpdateTexture(tex, NULL, px, (int)(W * 4));
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR); /* smooth the downscale (1-bit -> AA) */
+        pg->tex = tex;
+    }
+    SDL_free(px);
+    SDL_free(bits);
 }
 
 /* Map a byte to its cell index, falling back to the box (last cell) for
  * non-printable / non-ASCII (real UTF-8 decoding is the deferred next step). */
-static inline size_t cell_index(unsigned char ch)
+static inline size_t cell_index(const FontPage *pg, unsigned char ch)
 {
-    if (ch >= ZUIL_FONT_FIRST && ch <= 0x7E) return (size_t)(ch - ZUIL_FONT_FIRST);
-    return ZUIL_FONT_COUNT - 1; /* U+007F slot = fallback box */
+    if (ch >= pg->first && ch <= pg->first + pg->count - 2) return (size_t)(ch - pg->first);
+    return pg->count - 1; /* last cell = fallback box */
 }
 
 void zuil_set_font_scale(float s)
@@ -234,28 +333,39 @@ void zuil_set_font_scale(float s)
     g_font_scale = s;
 }
 
+void zuil_set_font_style(int flags)
+{
+    g_style = (flags < 0) ? 0 : (size_t)flags; /* clamped to npages at use */
+}
+
 void zuil_draw_text(float x, float y, const char *utf8)
 {
     if (!g_ren || !utf8) return;
-    ensure_atlas();
-    SDL_Texture *tex = g_pages[0].tex;
+    ensure_parsed();
+    if (!g_npages) return;
+    size_t pi = active_page();
+    ensure_atlas(pi);
+    FontPage *pg = &g_pages[pi];
+    SDL_Texture *tex = pg->tex;
     if (!tex) return;
 
     /* Tint the white glyphs with the current draw color. */
     SDL_SetTextureColorMod(tex, g_col[0], g_col[1], g_col[2]);
     SDL_SetTextureAlphaMod(tex, g_col[3]);
 
-    const float adv = (float)ZUIL_FONT_CELL * g_font_scale;
-    const float dim = (float)ZUIL_FONT_CELL * g_font_scale;
+    const size_t cols = ATLAS_COLS;
+    const size_t stride_w = pg->cell_w + ATLAS_GUTTER, stride_h = pg->cell_h + ATLAS_GUTTER;
+    /* draw the native glyph downscaled into the em (nominal) box * scale */
+    const float cw_dst = (float)pg->em_w * g_font_scale;
+    const float ch_dst = (float)pg->em_h * g_font_scale;
     float pen = x;
     for (const unsigned char *p = (const unsigned char *)utf8; *p; p++) {
-        size_t ci = cell_index(*p);
-        SDL_FRect src = { (float)((ci % ATLAS_COLS) * ZUIL_FONT_CELL),
-                          (float)((ci / ATLAS_COLS) * ZUIL_FONT_CELL),
-                          ZUIL_FONT_CELL, ZUIL_FONT_CELL };
-        SDL_FRect dst = { dx(pen), dy(y), dim, dim };
+        size_t ci = cell_index(pg, *p);
+        SDL_FRect src = { (float)((ci % cols) * stride_w), (float)((ci / cols) * stride_h),
+                          (float)pg->cell_w, (float)pg->cell_h };
+        SDL_FRect dst = { dx(pen), dy(y), cw_dst, ch_dst };
         SDL_RenderTexture(g_ren, tex, &src, &dst);
-        pen += adv;
+        pen += cw_dst;
     }
 }
 
@@ -271,7 +381,9 @@ static inline size_t glyph_count(const char *utf8)
 
 float zuil_font_advance(void)
 {
-    return (float)ZUIL_FONT_CELL * g_font_scale; /* the one true horizontal step */
+    ensure_parsed();
+    if (!g_npages) return 0;
+    return (float)g_pages[active_page()].em_w * g_font_scale;
 }
 
 float zuil_text_width(const char *utf8)
@@ -281,7 +393,9 @@ float zuil_text_width(const char *utf8)
 
 float zuil_text_height(void)
 {
-    return (float)ZUIL_FONT_CELL * g_font_scale;
+    ensure_parsed();
+    if (!g_npages) return 0;
+    return (float)g_pages[active_page()].em_h * g_font_scale;
 }
 
 /* --- input snapshot accessors -------------------------------------------- */

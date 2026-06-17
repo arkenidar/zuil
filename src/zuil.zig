@@ -45,22 +45,38 @@ var g_clip_len: usize = 0;
 // the same color set_color last applied to the renderer.
 var g_col = [4]u8{ 0, 0, 0, 255 };
 
-// --- text / bitmap font ---------------------------------------------------
-// The font is the public-domain 8x8 ASCII page baked at build of tools/
-// gen_font8x8.py and @embedFile'd here (the C twin #includes src/font8x8.h —
-// identical 768 bytes). NOT SDL3_ttf: zero extra deps, web/Android-friendly.
-const font_bin = @embedFile("font8x8.bin");
-const FONT_FIRST = 0x20; // first code point in the baked page
-const FONT_COUNT = 96; // U+0020..U+007F (last cell is the fallback box)
-const FONT_CELL = 8; // 8x8 glyph cell
-const ATLAS_COLS = 16; // glyph grid: 16 x 6 = 96 cells
-const ATLAS_ROWS = FONT_COUNT / ATLAS_COLS;
+// --- text / font atlas ----------------------------------------------------
+// Glyphs come from a baked container of style PAGES (regular/bold/italic/
+// bold-italic), each a real TTF face rendered 1-bit by the dev-only
+// tools/gen_font_atlas.py and @embedFile'd here (the C twin #includes the same
+// bytes from src/font_atlas.h). Container + RLE format: see the generator.
+const font_blob = @embedFile("font_atlas.bin");
+const ATLAS_COLS = 16; // glyph-grid columns per page texture
+const ATLAS_GUTTER = 1; // transparent px between cells so linear filtering can't bleed neighbours
+const MAX_PAGES = 8; // plenty for the 4 style pages today
 
-// One font PAGE = one glyph-grid texture. Array form from day one so the later
-// big high-detail atlas can add bold/italic pages without touching draw_text;
-// today only page 0 (regular) exists.
-const FontPage = struct { tex: ?*c.SDL_Texture = null, cols: c_int = ATLAS_COLS };
-var g_pages = [1]FontPage{.{}};
+// One parsed PAGE: the NATIVE (oversampled, baked) cell + the EM (nominal) cell
+// that font_scale=1.0 maps to, the codepoint range, and where its (raw|RLE)
+// glyph data sits in the blob. Glyphs are stored at the native cell and drawn
+// DOWNSCALED to em*scale with linear filtering (cheap antialiasing from a 1-bit
+// source). Texture built lazily, freed on window close.
+const FontPage = struct {
+    tex: ?*c.SDL_Texture = null,
+    cell_w: u16 = 0, // native (atlas) cell
+    cell_h: u16 = 0,
+    em_w: u16 = 0, // em (nominal) cell = display size at scale 1.0
+    em_h: u16 = 0,
+    first: u16 = 0,
+    count: u16 = 0,
+    depth: u8 = 1, // 1 = mono (RLE-able); 32 = RGBA (future emoji, raw)
+    enc: u8 = 0, // 0 = raw, 1 = RLE
+    data_off: usize = 0,
+    data_len: usize = 0,
+};
+var g_pages = std.mem.zeroes([MAX_PAGES]FontPage);
+var g_npages: usize = 0;
+var g_parsed = false;
+var g_style: usize = 0; // selected page index (style bits)
 var g_font_scale: f32 = 1.0;
 
 inline fn dx(x: f32) f32 {
@@ -176,72 +192,186 @@ export fn zuil_draw_line(x1: f32, y1: f32, x2: f32, y2: f32) callconv(.c) void {
 
 // --- bitmap text ----------------------------------------------------------
 
-// Build page 0's glyph-grid texture once (lazy: needs the renderer). White ink
-// + alpha so draw_text can tint it via color/alpha mod; BLEND so the
-// transparent background shows through. Recreatable: window_close nulls it.
-fn ensureAtlas() void {
-    const ren = g_ren orelse return;
-    if (g_pages[0].tex != null) return;
+inline fn rd16(off: usize) u16 {
+    return @as(u16, font_blob[off]) | (@as(u16, font_blob[off + 1]) << 8);
+}
+inline fn rd32(off: usize) u32 {
+    return @as(u32, font_blob[off]) | (@as(u32, font_blob[off + 1]) << 8) |
+        (@as(u32, font_blob[off + 2]) << 16) | (@as(u32, font_blob[off + 3]) << 24);
+}
 
-    const W = ATLAS_COLS * FONT_CELL; // 128
-    const H = ATLAS_ROWS * FONT_CELL; // 48
-    var px = std.mem.zeroes([W * H]u32); // RGBA32; white=0xFFFFFFFF, bg=0 (endian-agnostic)
+// Parse the blob's header + page table once (no renderer needed, so measurement
+// works before the first frame). Bad/short blob -> g_npages stays 0.
+fn ensureParsed() void {
+    if (g_parsed) return;
+    g_parsed = true;
+    if (font_blob.len < 8) return;
+    if (font_blob[0] != 'Z' or font_blob[1] != 'F' or font_blob[2] != '0' or font_blob[3] != '2') return;
+    const n = font_blob[4];
+    var off: usize = 8;
     var i: usize = 0;
-    while (i < FONT_COUNT) : (i += 1) {
-        const gx = (i % ATLAS_COLS) * FONT_CELL;
-        const gy = (i / ATLAS_COLS) * FONT_CELL;
+    while (i < n and i < MAX_PAGES) : (i += 1) {
+        if (off + 14 > font_blob.len) break;
+        const dlen = rd32(off + 10);
+        g_pages[i] = .{
+            .cell_w = font_blob[off],
+            .cell_h = font_blob[off + 1],
+            .em_w = font_blob[off + 2],
+            .em_h = font_blob[off + 3],
+            .first = rd16(off + 4),
+            .count = rd16(off + 6),
+            .depth = font_blob[off + 8],
+            .enc = font_blob[off + 9],
+            .data_off = off + 14,
+            .data_len = dlen,
+        };
+        off += 14 + dlen;
+        if (off > font_blob.len) break;
+    }
+    g_npages = i;
+}
+
+inline fn activePage() usize {
+    return if (g_style < g_npages) g_style else 0;
+}
+
+// Expand a page's glyph data into a per-pixel bit buffer (1 byte/pixel, 0/1),
+// row-major (glyph, row, col) — uniform whatever the on-disk encoding is.
+fn expandPage(pg: *const FontPage, out: []u8) void {
+    const data = font_blob[pg.data_off .. pg.data_off + pg.data_len];
+    const cw: usize = pg.cell_w;
+    const ch: usize = pg.cell_h;
+    const count: usize = pg.count;
+    if (pg.enc == 1) { // RLE: toggle run-length, starting color 0 (off)
+        var color: u8 = 0;
+        var pos: usize = 0;
+        var i: usize = 0;
+        while (pos < out.len and i < data.len) {
+            var run: usize = 0;
+            while (i < data.len) {
+                const b = data[i];
+                i += 1;
+                run += b;
+                if (b != 255) break;
+            }
+            var k: usize = 0;
+            while (k < run and pos + k < out.len) : (k += 1) out[pos + k] = color;
+            pos += run;
+            color ^= 1;
+        }
+    } else { // raw: cell_h rows of ceil(cw/8) bytes per glyph
+        const row_bytes = (cw + 7) / 8;
+        var g: usize = 0;
+        while (g < count) : (g += 1) {
+            var row: usize = 0;
+            while (row < ch) : (row += 1) {
+                var col: usize = 0;
+                while (col < cw) : (col += 1) {
+                    const byte = data[(g * ch + row) * row_bytes + (col / 8)];
+                    out[(g * ch + row) * cw + col] = @intCast((byte >> @intCast(col % 8)) & 1);
+                }
+            }
+        }
+    }
+}
+
+// Build a page's glyph-grid texture once (lazy: needs the renderer). White ink
+// + alpha so draw_text can tint it; BLEND so the background shows through.
+// Recreatable: window_close nulls every page's tex.
+fn ensureAtlas(pi: usize) void {
+    const ren = g_ren orelse return;
+    const pg = &g_pages[pi];
+    if (pg.tex != null) return;
+    const cw: usize = pg.cell_w;
+    const ch: usize = pg.cell_h;
+    const count: usize = pg.count;
+    if (cw == 0 or ch == 0 or count == 0) return;
+
+    const cols = ATLAS_COLS;
+    const rows = (count + cols - 1) / cols;
+    const stride_w = cw + ATLAS_GUTTER; // leave a transparent gutter between cells
+    const stride_h = ch + ATLAS_GUTTER;
+    const W = cols * stride_w;
+    const H = rows * stride_h;
+
+    const nbits = count * cw * ch;
+    const bitbuf = c.SDL_malloc(nbits) orelse return;
+    defer c.SDL_free(bitbuf);
+    const bits: [*]u8 = @ptrCast(bitbuf);
+    expandPage(pg, bits[0..nbits]);
+
+    const npx = W * H;
+    const pxbuf = c.SDL_malloc(npx * 4) orelse return;
+    defer c.SDL_free(pxbuf);
+    const px: [*]u32 = @ptrCast(@alignCast(pxbuf));
+    @memset(px[0..npx], 0); // RGBA32; white=0xFFFFFFFF, bg=0 (endian-agnostic)
+    var g: usize = 0;
+    while (g < count) : (g += 1) {
+        const gx = (g % cols) * stride_w;
+        const gy = (g / cols) * stride_h;
         var row: usize = 0;
-        while (row < FONT_CELL) : (row += 1) {
-            const bits = font_bin[i * FONT_CELL + row];
-            var col: u3 = 0;
-            while (true) : (col += 1) {
-                if ((bits >> col) & 1 != 0) // bit col (LSB) = leftmost column
+        while (row < ch) : (row += 1) {
+            var col: usize = 0;
+            while (col < cw) : (col += 1) {
+                if (bits[(g * ch + row) * cw + col] != 0)
                     px[(gy + row) * W + gx + col] = 0xFFFFFFFF;
-                if (col == FONT_CELL - 1) break;
             }
         }
     }
 
-    const tex = c.SDL_CreateTexture(ren, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, W, H) orelse return;
-    _ = c.SDL_UpdateTexture(tex, null, &px, W * @sizeOf(u32));
+    const tex = c.SDL_CreateTexture(ren, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, @intCast(W), @intCast(H)) orelse return;
+    _ = c.SDL_UpdateTexture(tex, null, pxbuf, @intCast(W * 4));
     _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
-    g_pages[0].tex = tex;
+    _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_LINEAR); // smooth the downscale (1-bit -> AA)
+    pg.tex = tex;
 }
 
 // Map a byte to its cell index, falling back to the box (last cell) for
 // non-printable / non-ASCII (real UTF-8 decoding is the deferred next step).
-inline fn cellIndex(ch: u8) usize {
-    if (ch >= FONT_FIRST and ch <= 0x7E) return ch - FONT_FIRST;
-    return FONT_COUNT - 1; // U+007F slot = fallback box
+inline fn cellIndex(pg: *const FontPage, ch: u8) usize {
+    const cp = @as(u16, ch);
+    if (cp >= pg.first and cp <= pg.first + pg.count - 2) return cp - pg.first;
+    return pg.count - 1; // last cell = fallback box
 }
 
 export fn zuil_set_font_scale(s: f32) callconv(.c) void {
     g_font_scale = s;
 }
 
+export fn zuil_set_font_style(flags: c_int) callconv(.c) void {
+    g_style = if (flags < 0) 0 else @intCast(flags); // clamped to npages at use
+}
+
 export fn zuil_draw_text(x: f32, y: f32, utf8: [*c]const u8) callconv(.c) void {
     const ren = g_ren orelse return;
     if (utf8 == null) return;
-    ensureAtlas();
-    const page = g_pages[0];
-    const tex = page.tex orelse return;
+    ensureParsed();
+    if (g_npages == 0) return;
+    const pi = activePage();
+    ensureAtlas(pi);
+    const pg = &g_pages[pi];
+    const tex = pg.tex orelse return;
 
     // Tint the white glyphs with the current draw color.
     _ = c.SDL_SetTextureColorMod(tex, g_col[0], g_col[1], g_col[2]);
     _ = c.SDL_SetTextureAlphaMod(tex, g_col[3]);
 
-    const adv = @as(f32, FONT_CELL) * g_font_scale;
-    const dim = @as(f32, FONT_CELL) * g_font_scale;
+    const cols = ATLAS_COLS;
+    const stride_w = pg.cell_w + ATLAS_GUTTER;
+    const stride_h = pg.cell_h + ATLAS_GUTTER;
+    // draw the native glyph downscaled into the em (nominal) box * scale
+    const cw_dst = @as(f32, @floatFromInt(pg.em_w)) * g_font_scale;
+    const ch_dst = @as(f32, @floatFromInt(pg.em_h)) * g_font_scale;
     var pen = x;
     var p: usize = 0;
     while (utf8[p] != 0) : (p += 1) {
-        const ci = cellIndex(utf8[p]);
-        const cgx: f32 = @floatFromInt((ci % ATLAS_COLS) * FONT_CELL);
-        const cgy: f32 = @floatFromInt((ci / ATLAS_COLS) * FONT_CELL);
-        var src = c.SDL_FRect{ .x = cgx, .y = cgy, .w = FONT_CELL, .h = FONT_CELL };
-        var dst = c.SDL_FRect{ .x = dx(pen), .y = dy(y), .w = dim, .h = dim };
+        const ci = cellIndex(pg, utf8[p]);
+        const sx: f32 = @floatFromInt((ci % cols) * stride_w);
+        const sy: f32 = @floatFromInt((ci / cols) * stride_h);
+        var src = c.SDL_FRect{ .x = sx, .y = sy, .w = @floatFromInt(pg.cell_w), .h = @floatFromInt(pg.cell_h) };
+        var dst = c.SDL_FRect{ .x = dx(pen), .y = dy(y), .w = cw_dst, .h = ch_dst };
         _ = c.SDL_RenderTexture(ren, tex, &src, &dst);
-        pen += adv;
+        pen += cw_dst;
     }
 }
 
@@ -255,7 +385,9 @@ inline fn glyphCount(utf8: [*c]const u8) usize {
 }
 
 export fn zuil_font_advance() callconv(.c) f32 {
-    return @as(f32, FONT_CELL) * g_font_scale; // the one true horizontal step
+    ensureParsed();
+    if (g_npages == 0) return 0;
+    return @as(f32, @floatFromInt(g_pages[activePage()].em_w)) * g_font_scale;
 }
 
 export fn zuil_text_width(utf8: [*c]const u8) callconv(.c) f32 {
@@ -263,7 +395,9 @@ export fn zuil_text_width(utf8: [*c]const u8) callconv(.c) f32 {
 }
 
 export fn zuil_text_height() callconv(.c) f32 {
-    return @as(f32, FONT_CELL) * g_font_scale;
+    ensureParsed();
+    if (g_npages == 0) return 0;
+    return @as(f32, @floatFromInt(g_pages[activePage()].em_h)) * g_font_scale;
 }
 
 // --- input snapshot accessors --------------------------------------------

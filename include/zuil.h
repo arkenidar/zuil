@@ -41,9 +41,10 @@ void zuil_draw_rect(float x, float y, float w, float h);
 void zuil_draw_line(float x1, float y1, float x2, float y2);
 
 /* Bitmap text — the built-in 1-bit ASCII font atlas, NOT SDL3_ttf. This is the
- * standing text mechanism (2026-06-15): a public-domain 8x8 fixed-width font is
- * baked into the binary (src/font8x8.{h,bin}), uploaded once as one tinted
- * texture, then cropped per-glyph and scaled. No external font lib, no font
+ * standing text mechanism (2026-06-15): a fixed-width font is baked into the
+ * binary (src/font_atlas.{h,bin}, real TTF faces rendered 1-bit), uploaded once
+ * per style page as one tinted texture, then cropped per-glyph and scaled. No
+ * external font lib, no font
  * assets — keeps deps empty (build.zig.zon), helps web/Android, fits the C-first
  * hedge. Fixed-width with uniform spacing; glyphs draw in the current
  * zuil_set_color tint and honor the translation stack. Bytes outside printable
@@ -51,6 +52,17 @@ void zuil_draw_line(float x1, float y1, float x2, float y2);
  * deferred next step). */
 void zuil_set_font_scale(float s); /* sticky, default 1.0 (like set_color/translate) */
 void zuil_draw_text(float x, float y, const char *utf8);
+
+/* Font style — selects one of the baked glyph PAGES (regular/bold/italic), each
+ * a real face rasterized 1-bit into the atlas container (src/font_atlas.{h,bin},
+ * from the dev-only generator). OR the flags for bold-italic. Sticky like the
+ * font scale; the glyphs are fixed-width so style never changes the advance, so
+ * measurement is unaffected. Bytes are still ASCII-only here (UTF-8 + Unicode
+ * pages are the next step); colored pages (emoji) are a future RGBA depth. */
+#define ZUIL_FONT_REGULAR 0
+#define ZUIL_FONT_BOLD    1
+#define ZUIL_FONT_ITALIC  2
+void zuil_set_font_style(int flags);
 
 /* Text measurement — a first-class core responsibility, not a widget concern:
  * layout sizes content to these, and editable text uses the advance for caret
